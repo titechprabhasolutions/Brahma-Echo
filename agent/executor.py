@@ -247,6 +247,38 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
     elif tool == "flight_finder":
         from actions.flight_finder import flight_finder
         return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
+
+    elif tool in ("spotify_controller", "spotify", "music"):
+        from actions.spotify_controller import spotify_controller
+        return spotify_controller(parameters=parameters, player=None, speak=speak) or "Done."
+
+    elif tool in ("calendar_scheduler", "calendar", "schedule"):
+        from actions.calendar_scheduler import calendar_scheduler
+        return calendar_scheduler(parameters=parameters, player=None, speak=speak) or "Done."
+
+    elif tool in ("daily_briefing", "briefing"):
+        from actions.daily_briefing import daily_briefing
+        return daily_briefing(parameters=parameters, player=None, speak=speak) or "Done."
+
+    elif tool in ("code_helper", "code_agent"):
+        from actions.code_helper import code_helper
+        return code_helper(parameters=parameters, player=None, speak=speak) or "Done."
+
+    elif tool == "calorie_counter":
+        from actions.calorie_counter import run as run_calorie_counter
+        return run_calorie_counter(parameters=parameters, player=None) or "Done."
+
+    elif tool == "pushup_counter":
+        from actions.pushup_counter import run as run_pushup_counter
+        return run_pushup_counter(parameters=parameters, player=None) or "Done."
+
+    elif tool == "system_monitor":
+        from actions.system_monitor import run as run_system_monitor
+        return run_system_monitor(parameters=parameters, player=None) or "Done."
+
+    elif tool == "upload_video":
+        from actions.upload_video import run as run_upload_video
+        return run_upload_video(parameters=parameters, player=None) or "Done."
     else:
         print(f"[Executor] ⚠️ Unknown tool '{tool}' — no developer fallback is configured")
         return f"Unknown action: {tool}"

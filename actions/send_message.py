@@ -182,6 +182,64 @@ def _send_telegram(receiver: str, message: str) -> str:
         return f"Telegram error: {e}"
 
 
+def _send_email_via_browser(platform: str, receiver: str, message: str) -> str:
+    try:
+        import urllib.parse
+        import webbrowser
+        import psutil
+        import time
+        import pyautogui
+        
+        # Check if Chrome or Edge is running
+        browser_name = "browser"
+        for proc in psutil.process_iter(["name"]):
+            try:
+                name = proc.info["name"].lower()
+                if "chrome" in name:
+                    browser_name = "Chrome"
+                    break
+                elif "msedge" in name:
+                    browser_name = "Edge"
+                    break
+                elif "firefox" in name:
+                    browser_name = "Firefox"
+                    break
+            except Exception:
+                continue
+
+        subject = "Message from Brahma Echo"
+        
+        plat_lower = platform.lower()
+        if "gmail" in plat_lower or "chrome" in plat_lower or "browser" in plat_lower:
+            quoted_recipient = urllib.parse.quote(receiver)
+            quoted_subject = urllib.parse.quote(subject)
+            quoted_body = urllib.parse.quote(message)
+            url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quoted_recipient}&su={quoted_subject}&body={quoted_body}"
+            app_name = f"Gmail in {browser_name}"
+            
+            print(f"[SendMessage] Automating Chrome to open: {url}")
+            webbrowser.open(url)
+            
+        elif "outlook" in plat_lower:
+            quoted_recipient = urllib.parse.quote(receiver)
+            quoted_subject = urllib.parse.quote(subject)
+            quoted_body = urllib.parse.quote(message)
+            url = f"https://outlook.live.com/default/?path=/mail/action/compose&to={quoted_recipient}&subject={quoted_subject}&body={quoted_body}"
+            app_name = f"Outlook in {browser_name}"
+            webbrowser.open(url)
+        else:
+            quoted_recipient = urllib.parse.quote(receiver)
+            quoted_subject = urllib.parse.quote(subject)
+            quoted_body = urllib.parse.quote(message)
+            url = f"mailto:{quoted_recipient}?subject={quoted_subject}&body={quoted_body}"
+            app_name = "Default Mail Client"
+            webbrowser.open(url)
+            
+        return f"Opened {app_name} to compose email to {receiver}."
+    except Exception as e:
+        return f"Email browser compose error: {e}"
+
+
 def _send_generic(platform: str, receiver: str, message: str) -> str:
     try:
         if not _open_app(platform):
@@ -242,6 +300,8 @@ def send_message(
 
     if "instagram" in platform and mode == "upload":
         result = _upload_instagram_media(media_path, caption=message_text, mode="post")
+    elif "gmail" in platform or "outlook" in platform or platform in ("email", "mail"):
+        result = _send_email_via_browser(platform, receiver, message_text)
     elif "whatsapp" in platform or "wp" in platform or "wapp" in platform:
         result = _send_whatsapp(receiver, message_text)
     elif "instagram" in platform or "ig" in platform or "insta" in platform:

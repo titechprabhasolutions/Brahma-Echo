@@ -469,6 +469,62 @@ def file_controller(
     path    = (parameters or {}).get("path", "desktop")
     name    = (parameters or {}).get("name", "")
     content = (parameters or {}).get("content", "")
+    target  = (parameters or {}).get("target", "")
+
+    # Route to Android if target is specified
+    if target and target.lower() not in ["pc", "computer", "local"]:
+        try:
+            from actions.brahma_connect import connect_execute
+            import json
+            
+            # Map local action names to android action names
+            android_action_map = {
+                "list": "file_list",
+                "read": "file_read",
+                "write": "file_write",
+                "delete": "file_delete",
+            }
+            
+            android_action = android_action_map.get(action)
+            if not android_action:
+                return f"Action '{action}' is not supported on Android targets yet."
+                
+            command_params = {
+                "target": target,
+                "action": android_action,
+                "parameters": {
+                    "path": str(Path(path) / name) if name else path,
+                    "content": content,
+                    "append": parameters.get("append", False)
+                }
+            }
+            
+            if player:
+                player.write_log(f"Routing {action} to {target}...")
+                
+            res_str = connect_execute(command_params)
+            try:
+                res_dict = json.loads(res_str)
+                if res_dict.get("success"):
+                    data = res_dict.get("data", {})
+                    # Format responses similarly to local output
+                    if action == "list":
+                        items = data.get("items", [])
+                        lines = [f"Contents of {data.get('path', path)} ({len(items)} items):"]
+                        for item in items:
+                            icon = "📁" if item.get("is_dir") else "📄"
+                            lines.append(f"{icon} {item.get('name')} ({item.get('size')} bytes)")
+                        return "\n".join(lines)
+                    elif action == "read":
+                        return data.get("content", "")
+                    else:
+                        return data.get("message", "Success.")
+                else:
+                    return f"Android error: {res_dict.get('error', 'Unknown')}"
+            except Exception as e:
+                return f"Error executing on Android: {res_str}"
+        except Exception as e:
+            return f"Failed to connect to device: {e}"
 
     def _full_path(p: str, n: str) -> str:
         base = _resolve_path(p)

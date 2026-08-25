@@ -107,19 +107,30 @@ def _get_opera_executable() -> str | None:
 def _find_browser_executable(prog_id: str) -> tuple:
     """
     Returns (engine_name, exe_path, channel, is_opera).
-    is_opera=True → extra args needed to prevent private-mode launch.
+    Prioritizes Google Chrome.
     """
     system  = platform.system()
     os_bins = _BROWSER_BINARIES.get(system, {})
+
+    # Check for Google Chrome explicitly first
+    chrome_candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe") if system == "Windows" else None,
+        shutil.which("chrome"),
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+    ]
+    for c in chrome_candidates:
+        if c and os.path.exists(c):
+            _log(f"[Browser] 🔍 Preferred Google Chrome found at: {c}")
+            return "chromium", c, "chrome", False
 
     if any(x in prog_id for x in ["firefox", "mozilla"]):
         return "firefox", None, None, False
 
     if "safari" in prog_id:
         return "webkit", None, None, False
-
-    if "edge" in prog_id:
-        return "chromium", None, "msedge", False
 
     if "opera" in prog_id:
         exe = _get_opera_executable()
@@ -145,10 +156,10 @@ def _find_browser_executable(prog_id: str) -> tuple:
                 _log(f"[Browser] 🔍 Found {browser_name} at: {path}")
                 return "chromium", path, None, False
 
-    if "chrome" in prog_id or not prog_id:
-        return "chromium", None, "chrome", False
+    if "edge" in prog_id:
+        return "chromium", None, "msedge", False
 
-    return "chromium", None, None, False
+    return "chromium", None, "chrome", False
 
 
 class _BrowserThread:

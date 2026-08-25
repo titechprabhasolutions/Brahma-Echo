@@ -314,3 +314,35 @@ def forget(key: str, category: str = "notes") -> str:
     return f"Not found: {category}/{key}"
 
 forget_memory = forget
+
+
+CHAT_HISTORY_PATH = BASE_DIR / "memory" / "chat_history.json"
+MAX_HISTORY_LENGTH = 40
+
+def load_chat_history() -> list[dict]:
+    if not CHAT_HISTORY_PATH.exists():
+        return []
+    with _lock:
+        try:
+            data = json.loads(CHAT_HISTORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception as e:
+            print(f"[Memory] ⚠️ Chat history load error: {e}")
+        return []
+
+def save_chat_history(history: list[dict]) -> None:
+    CHAT_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _lock:
+        CHAT_HISTORY_PATH.write_text(
+            json.dumps(history[-MAX_HISTORY_LENGTH:], indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+
+def append_to_chat_history(user_msg: str, ai_reply: str) -> None:
+    history = load_chat_history()
+    if user_msg:
+        history.append({"role": "user", "content": user_msg})
+    if ai_reply:
+        history.append({"role": "assistant", "content": ai_reply})
+    save_chat_history(history)

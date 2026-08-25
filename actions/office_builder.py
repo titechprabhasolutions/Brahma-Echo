@@ -13,11 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-from actions.ppt_template_workflow import (
-    build_presentation_from_template,
-    infer_presentation_profile,
-    resolve_presentation_template,
-)
+from actions.ppt_template_workflow import infer_presentation_profile
 
 
 PROJECT_NAME = "Brahma AI - Lite"
@@ -365,27 +361,18 @@ def create_presentation(parameters: dict, player=None) -> str:
     slides = _slides_from_outline(parameters.get("outline"), _parse_json_arg(parameters.get("slides"), None))
     slides = slides[:20] if slides else slides
 
-    profile = infer_presentation_profile(title, subtitle=subtitle, theme_hint=theme_hint or "", outline=parameters.get("outline") or "", slides=slides)
-    template_choice = resolve_presentation_template(profile)
-    if template_choice:
-        try:
-            return build_presentation_from_template(
-                template_path=template_choice["path"],
-                parameters=parameters,
-                profile=profile,
-                slides=slides,
-                output_path=output_path,
-                auto_open=auto_open,
-                player=player,
-            )
-        except Exception as exc:
-            if player and hasattr(player, "add_system_message"):
-                try:
-                    player.add_system_message(
-                        f"Template-based presentation failed, falling back to the built-in designer: {exc}"
-                    )
-                except Exception:
-                    pass
+    # Bypass template system entirely per user request
+    from actions.ppt_creative_generator import generate_presentation
+    result_path = generate_presentation(
+        slides=slides,
+        title=title,
+        subtitle=subtitle,
+        style=theme_hint,
+        output_path=output_path,
+        auto_open=auto_open,
+    )
+    return f"Presentation created: {result_path}"
+    # Fallback to the built-in creative, template-free generator below
 
     def add_textbox(slide, left, top, width, height, text, font_size=18, color_key="text", bold=False,
                     font_name="Aptos", align=None, italic=False, all_caps=False):

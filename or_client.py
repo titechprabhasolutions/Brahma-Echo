@@ -221,14 +221,16 @@ class OpenRouterClient:
             "You are a component of Brahma Echo, an open-source personal assistant. "
             "Be concise, helpful, and precise."
         ),
+        history: Optional[list[dict]] = None,
         model: Optional[str] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
     ) -> str:
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": prompt},
-        ]
+        messages = [{"role": "system", "content": system}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
         return self._call_with_fallback(
             TEXT_MODELS, messages, model, max_tokens, temperature
         )

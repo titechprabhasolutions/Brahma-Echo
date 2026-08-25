@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import google.generativeai as genai
+
 
 def _base_dir() -> Path:
     return Path(__file__).resolve().parent
@@ -202,10 +204,63 @@ class WorkspaceStore:
             ).fetchone()
         return bool(row)
 
+    def _summarize_session_async(self, conversation_id: str) -> None:
+        messages = self.get_message_payloads(conversation_id)
+        if not messages:
+            return
+        
+        user_texts = [m["text"] for m in messages if m["role"] == "user"]
+        if not user_texts:
+            return
+            
+        full_text = "\n".join(user_texts)
+        if len(full_text) > 10000:
+            full_text = full_text[-10000:]
+            
+        def _do_summary():
+            try:
+                from google import genai
+                base_dir = Path(__file__).resolve().parent
+                key_path = base_dir / "config" / "api_keys.json"
+                with open(key_path, "r", encoding="utf-8") as f:
+                    api_key = json.load(f)["gemini_api_key"]
+                
+                client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
+                prompt = (
+                    "Summarize the following user conversation into 1-2 short, conversational sentences "
+                    "that describe what the user was doing or asking about. Phrase it as 'Yesterday you were...'\n\n"
+                    f"Conversation:\n{full_text}"
+                )
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config={"temperature": 0.5},
+                )
+                
+                text_parts = []
+                for candidate in getattr(response, "candidates", []) or []:
+                    content = getattr(candidate, "content", None)
+                    if not content: continue
+                    for part in getattr(content, "parts", []) or []:
+                        pt = getattr(part, "text", None)
+                        if pt: text_parts.append(pt)
+                summary = "".join(text_parts).strip()
+                if not summary:
+                    summary = (getattr(response, "text", "") or "").strip()
+                
+                if summary:
+                    self._set_state("last_session_summary", summary)
+            except Exception as e:
+                print(f"[WorkspaceStore] Failed to summarize session: {e}")
+                
+        threading.Thread(target=_do_summary, daemon=True).start()
+
     def rollover_active_conversation_on_startup(self) -> str:
         current = self.get_active_conversation_id()
         if current and not self.conversation_has_messages(current):
             return current
+        if current:
+            self._summarize_session_async(current)
         return self.create_conversation("New Conversation")
 
     def list_conversations(self, search: str = "") -> list[dict[str, Any]]:

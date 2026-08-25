@@ -42,7 +42,7 @@ except Exception:
     WEB_ENGINE_AVAILABLE = False
 
 from discord_bot import DiscordBotService
-from gesture_utils import estimate_gesture_state
+from gesture_utils import estimate_gesture_state, GestureTracker
 from smart_home import SmartHomeService
 from smart_home_page_new import BrahmaHomePage, _DeviceTile
 from workspace_store import store as workspace_store
@@ -74,24 +74,88 @@ class C:
     BG        = "#020305"
     PANEL     = "#07080b"
     PANEL2    = "#0d0f14"
-    BORDER    = "rgba(255, 170, 48, 0.12)"
-    BORDER_B  = "rgba(255, 170, 48, 0.20)"
-    BORDER_A  = "rgba(255, 170, 48, 0.15)"
-    PRI       = "#ffaa30"
-    PRI_DIM   = "#e59400"
-    PRI_GHO   = "rgba(255, 170, 48, 0.15)"
-    ACC       = "#ffaa30"
-    ACC2      = "#ffea9f"
+    BORDER    = "rgba(255, 179, 0, 0.15)"
+    BORDER_B  = "rgba(255, 179, 0, 0.25)"
+    BORDER_A  = "rgba(255, 179, 0, 0.18)"
+    PRI       = "#ffb300"
+    PRI_DIM   = "#e6a100"
+    PRI_GHO   = "rgba(255, 179, 0, 0.15)"
+    ACC       = "#ffb300"
+    ACC2      = "#ffe066"
     GREEN     = "#37ff5f"
     GREEN_D   = "#1dcc43"
     RED       = "#ff3b30"
-    MUTED_C   = "#ffaa30"
+    MUTED_C   = "#ffb300"
     TEXT      = "#f4f6f8"
     TEXT_DIM  = "#8e949d"
     TEXT_MED  = "#c5cad2"
     WHITE     = "#ffffff"
     DARK      = "#000000"
     BAR_BG    = "#222222"
+
+    @classmethod
+    def load_theme(cls, theme_hex: str):
+        if not theme_hex.startswith("#") or len(theme_hex) != 7:
+            # Fallback to predefined colors if it's not a hex or just a word
+            if theme_hex.lower() == "blue": theme_hex = "#007aff"
+            elif theme_hex.lower() == "green": theme_hex = "#37ff5f"
+            elif theme_hex.lower() == "red": theme_hex = "#ff3b30"
+            else: theme_hex = "#ffb300"
+            
+        import colorsys
+        try:
+            r = int(theme_hex[1:3], 16)
+            g = int(theme_hex[3:5], 16)
+            b = int(theme_hex[5:7], 16)
+        except Exception:
+            r, g, b = 255, 179, 0
+            theme_hex = "#ffb300"
+            
+        h, l, s = colorsys.rgb_to_hls(r/255.0, g/255.0, b/255.0)
+        
+        # Dim (darker by reducing l by 15%)
+        l_dim = max(0.0, l - 0.15)
+        r_dim, g_dim, b_dim = colorsys.hls_to_rgb(h, l_dim, s)
+        hex_dim = f"#{int(r_dim*255):02x}{int(g_dim*255):02x}{int(b_dim*255):02x}"
+        
+        # Acc2 (lighter by increasing l by 15%)
+        l_light = min(1.0, l + 0.15)
+        r_light, g_light, b_light = colorsys.hls_to_rgb(h, l_light, s)
+        hex_light = f"#{int(r_light*255):02x}{int(g_light*255):02x}{int(b_light*255):02x}"
+
+        cls.PRI       = theme_hex
+        cls.PRI_DIM   = hex_dim
+        cls.PRI_GHO   = f"rgba({r}, {g}, {b}, 0.15)"
+        cls.ACC       = theme_hex
+        cls.ACC2      = hex_light
+        cls.MUTED_C   = theme_hex
+        cls.BORDER    = f"rgba({r}, {g}, {b}, 0.15)"
+        cls.BORDER_B  = f"rgba({r}, {g}, {b}, 0.25)"
+        cls.BORDER_A  = f"rgba({r}, {g}, {b}, 0.18)"
+
+try:
+    if APP_SETTINGS_FILE.exists():
+        with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            _global_settings = json.load(f)
+            C.load_theme(_global_settings.get("app_theme", "#ffb300"))
+except Exception:
+    pass
+
+# Patch setStyleSheet to dynamically replace hardcoded gold colors with the active theme
+_old_setStyleSheet = QWidget.setStyleSheet
+def _new_setStyleSheet(self, style):
+    if style:
+        style = style.replace("#ffb300", getattr(C, "PRI", "#ffb300"))
+        style = style.replace("#FFB300", getattr(C, "PRI", "#ffb300"))
+        try:
+            r, g, b = int(C.PRI[1:3], 16), int(C.PRI[3:5], 16), int(C.PRI[5:7], 16)
+            style = style.replace("255, 179, 0", f"{r}, {g}, {b}")
+            style = style.replace("255,179,0", f"{r},{g},{b}")
+            style = style.replace("255, 179, 0", f"{r}, {g}, {b}")
+        except Exception:
+            pass
+    _old_setStyleSheet(self, style)
+QWidget.setStyleSheet = _new_setStyleSheet
 
 
 class BackgroundWidget(QWidget):
@@ -129,7 +193,9 @@ class BackgroundWidget(QWidget):
                     st.setAttribute(st.WebAttribute.LocalContentCanAccessFileUrls, True)
                 except Exception:
                     pass
-                self._web_view.setUrl(QUrl.fromLocalFile(str(html_path)))
+                html_content = html_path.read_text(encoding="utf-8", errors="ignore")
+                html_content = self._apply_theme_to_html(html_content)
+                self._web_view.setHtml(html_content, baseUrl=QUrl.fromLocalFile(str(html_path.parent) + "/"))
                 self._web_view.setStyleSheet("background: #000000;")
                 self._web_view.resize(self.size())
                 self._web_view.lower()
@@ -139,6 +205,37 @@ class BackgroundWidget(QWidget):
 
     def _load_background(self) -> None:
         pass
+
+    def _apply_theme_to_html(self, html_content: str) -> str:
+        import colorsys
+        import re
+        
+        try:
+            r = int(C.PRI[1:3], 16)
+            g = int(C.PRI[3:5], 16)
+            b = int(C.PRI[5:7], 16)
+            target_h, _, _ = colorsys.rgb_to_hls(r/255.0, g/255.0, b/255.0)
+        except:
+            return html_content
+            
+        def map_hex(match):
+            old_hex = match.group(0)
+            prefix = old_hex[:2]
+            h_str = old_hex[2:]
+            if len(h_str) != 6: return old_hex
+            try:
+                or_r, or_g, or_b = int(h_str[:2], 16), int(h_str[2:4], 16), int(h_str[4:], 16)
+                _, or_l, or_s = colorsys.rgb_to_hls(or_r/255.0, or_g/255.0, or_b/255.0)
+                n_r, n_g, n_b = colorsys.hls_to_rgb(target_h, or_l, or_s)
+                return f"{prefix}{int(n_r*255):02x}{int(n_g*255):02x}{int(n_b*255):02x}"
+            except:
+                return old_hex
+                
+        gold_hexes = [r"0xffbe1a", r"0xaa8010", r"0x040302", r"0x553f05", r"0xffea80", r"0xfff2a3", r"0xffe680", r"0xd4af37", r"0x3b2e0c"]
+        for gh in gold_hexes:
+            html_content = re.sub(gh, map_hex, html_content, flags=re.IGNORECASE)
+            
+        return html_content
 
     def set_ai_state(self, state: str) -> None:
         if self._web_view:
@@ -256,9 +353,9 @@ class RemoteKeyOverlay(QWidget):
         self._key_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._key_lbl.setFont(QFont("Consolas", 36, QFont.Weight.Black))
         self._key_lbl.setStyleSheet(f"""
-            color: #ffaa30;
-            background: rgba(255, 170, 48, 0.05);
-            border: 1px solid rgba(255, 170, 48, 0.2);
+            color: #ffb300;
+            background: rgba(255, 179, 0, 0.05);
+            border: 1px solid rgba(255, 179, 0, 0.2);
             border-radius: 16px;
             padding: 18px;
             letter-spacing: 14px;
@@ -289,9 +386,9 @@ class RemoteKeyOverlay(QWidget):
                 border-radius: 12px;
             }}
             QPushButton:hover {{ 
-                background: rgba(255, 170, 48, 0.08); 
-                border: 1px solid rgba(255, 170, 48, 0.3);
-                color: #ffaa30;
+                background: rgba(255, 179, 0, 0.08); 
+                border: 1px solid rgba(255, 179, 0, 0.3);
+                color: #ffb300;
             }}
         """)
         self._new_btn.clicked.connect(self._refresh_key)
@@ -396,7 +493,7 @@ class RemoteKeyOverlay(QWidget):
         self._key_lbl.setText(key)
         self._key_lbl.setStyleSheet(f"""
             color: {C.WHITE};
-            background: rgba(255, 170, 48,28);
+            background: rgba(255, 179, 0,28);
             border: 1px solid {C.PRI};
             border-radius: 10px;
             padding: 8px;
@@ -735,49 +832,9 @@ _metrics = _SysMetrics()
 _CAM_OK_CACHE = {"ok": False, "ts": 0.0}
 
 
+
 def _camera_available() -> bool:
-    now = time.time()
-    if now - _CAM_OK_CACHE["ts"] < 10.0:
-        return bool(_CAM_OK_CACHE["ok"])
-
-    ok = False
-    cap = None
-    try:
-        import cv2  # optional dependency; used only for a quick camera probe
-
-        indices = [0, 1, 2]
-        if _OS == "Windows":
-            for idx in indices:
-                try:
-                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                    if cap.isOpened():
-                        ret, frame = cap.read()
-                        if ret and frame is not None:
-                            ok = True
-                            break
-                finally:
-                    if cap is not None:
-                        cap.release()
-                        cap = None
-        else:
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                ok = bool(ret and frame is not None)
-    except Exception:
-        ok = False
-    finally:
-        if cap is not None:
-            try:
-                cap.release()
-            except Exception:
-                pass
-
-    _CAM_OK_CACHE["ok"] = ok
-    _CAM_OK_CACHE["ts"] = now
-    return ok
-
-
+    return True
 class _GestureRenderCanvas(QWidget):
     CONNECTIONS = [
         (0, 1), (1, 2), (2, 3), (3, 4),
@@ -797,6 +854,11 @@ class _GestureRenderCanvas(QWidget):
         self._search_phase = 0
         self._target_opacity = 0.0
         self._skeleton_opacity = 0.0
+        self._invert_x = True
+
+    def set_invert_x(self, invert: bool):
+        self._invert_x = invert
+        self.update()
 
     def set_landmarks(self, landmarks: list[tuple[float, float, float]]):
         self._landmarks = landmarks or []
@@ -833,7 +895,10 @@ class _GestureRenderCanvas(QWidget):
         mid_y = (min_y + max_y) / 2.0
         points: list[QPointF] = []
         for x, y, _ in self._landmarks:
-            px = center_x + (x - mid_x) * scale
+            if getattr(self, "_invert_x", True):
+                px = center_x - (x - mid_x) * scale
+            else:
+                px = center_x + (x - mid_x) * scale
             py = center_y + (y - mid_y) * scale
             points.append(QPointF(px, py))
         return points
@@ -894,7 +959,7 @@ class GestureCameraPreview(QFrame):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 rgba(9, 10, 14, 255),
                     stop:1 rgba(3, 4, 7, 255));
-                border: 1px solid rgba(255, 170, 48, 0.24);
+                border: 1px solid rgba(255, 179, 0, 0.24);
                 border-radius: 16px;
             }}
             QLabel {{ background: transparent; }}
@@ -906,15 +971,16 @@ class GestureCameraPreview(QFrame):
         self._use_tasks_api = False
         self._vision_module = None
         self._prev_pinch = False
+        self._gesture_tracker = GestureTracker()
         self._smoothed_cursor: tuple[float, float] | None = None
         self._smoothed_screen: tuple[float, float] | None = None
         self._smoothed_landmarks: list[tuple[float, float, float]] | None = None
         self._search_phase = 0
         self._smoothing_alpha = 0.8
         self._gesture_canvas_alpha = 0.0
-        self._sensitivity = 1.0
-        self._sensitivity_levels = {"Low": 0.8, "Medium": 1.0, "High": 1.4}
-        self._invert_cursor_x = False
+        self._sensitivity = 2.2
+        self._sensitivity_levels = {"Low": 1.6, "Medium": 2.2, "High": 3.0, "Ultra": 4.0}
+        self._invert_cursor_x = True
         self._invert_cursor_y = False
         self._cursor_calibration_x_min: float | None = None
         self._cursor_calibration_x_max: float | None = None
@@ -947,12 +1013,27 @@ class GestureCameraPreview(QFrame):
         self._status_text.setStyleSheet("color: #ffb347;")
         header_row.addWidget(self._status_text)
 
+        self._invert_btn = QPushButton("⇄ Invert: ON")
+        self._invert_btn.setCheckable(True)
+        self._invert_btn.setChecked(True)
+        self._invert_btn.setFixedHeight(26)
+        self._invert_btn.setStyleSheet(
+            "QPushButton { background: rgba(255, 179, 0, 0.15); color: #ffb347; border: 1px solid rgba(255, 179, 0, 0.4); border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold; }"
+            "QPushButton:!checked { background: rgba(255, 255, 255, 0.05); color: #888; border: 1px solid rgba(255, 255, 255, 0.15); }"
+        )
+        def _toggle_invert(checked):
+            self._invert_cursor_x = checked
+            self._hand_canvas.set_invert_x(checked)
+            self._invert_btn.setText("⇄ Invert: ON" if checked else "⇄ Invert: OFF")
+        self._invert_btn.toggled.connect(_toggle_invert)
+        header_row.addWidget(self._invert_btn)
+
         self._sensitivity_select = QComboBox()
-        self._sensitivity_select.addItems(["Low", "Medium", "High"])
+        self._sensitivity_select.addItems(["Low", "Medium", "High", "Ultra"])
         self._sensitivity_select.setCurrentText("Medium")
         self._sensitivity_select.setFixedWidth(84)
         self._sensitivity_select.setStyleSheet(
-            "QComboBox { background: rgba(255,255,255,0.05); color: #f4f6f8; border: 1px solid rgba(255, 170, 48,0.24); border-radius: 8px; padding: 4px 8px; }"
+            "QComboBox { background: rgba(255,255,255,0.05); color: #f4f6f8; border: 1px solid rgba(255, 179, 0,0.24); border-radius: 8px; padding: 4px 8px; }"
             "QComboBox::drop-down { border: none; }")
         self._sensitivity_select.currentTextChanged.connect(self._set_sensitivity_level)
         header_row.addWidget(self._sensitivity_select)
@@ -1003,8 +1084,8 @@ class GestureCameraPreview(QFrame):
         except Exception:
             pass
 
-        self._set_status("Searching for hand...", "searching")
-        self._start_camera()
+        self._set_status("Camera offline", "lost")
+        # Do not start camera automatically
 
     def closeEvent(self, event):
         self._stop_camera()
@@ -1237,7 +1318,9 @@ class GestureCameraPreview(QFrame):
                 except Exception:
                     confidence = 1.0 if landmarks else 0.0
 
-        gesture = estimate_gesture_state(landmarks, self._prev_pinch)
+        gesture = estimate_gesture_state(landmarks, tracker=self._gesture_tracker)
+        if gesture.get("action"):
+            self._handle_air_action(gesture["action"])
         if gesture.get("cursor"):
             norm = self._calibrate_and_smooth_cursor(gesture["cursor"])
             self._move_cursor(norm)
@@ -1246,6 +1329,61 @@ class GestureCameraPreview(QFrame):
         self._prev_pinch = bool(gesture.get("pinch", False))
 
         self._render_hand(landmarks, gesture, confidence)
+
+    def _handle_air_action(self, action: str):
+        try:
+            from actions.spotify_controller import _press_media_key
+            import pyautogui
+
+            if action == "play_pause":
+                _press_media_key("playpause")
+                self._show_gesture_toast("✋ Air Gesture: Play / Pause")
+
+            elif action == "swipe_right":
+                # If tracking is inverted, swiping hand to user's right moves next
+                _press_media_key("nexttrack")
+                try:
+                    pyautogui.press("right")
+                except Exception:
+                    pass
+                self._show_gesture_toast("👉 Air Gesture: Next Track / Slide")
+
+            elif action == "swipe_left":
+                _press_media_key("prevtrack")
+                try:
+                    pyautogui.press("left")
+                except Exception:
+                    pass
+                self._show_gesture_toast("👈 Air Gesture: Previous Track / Slide")
+
+            elif action == "volume_up":
+                _press_media_key("volumeup")
+                self._show_gesture_toast("👍 Air Gesture: Volume Up")
+
+            elif action == "volume_down":
+                _press_media_key("volumedown")
+                self._show_gesture_toast("👎 Air Gesture: Volume Down")
+
+            elif action == "screenshot":
+                from datetime import datetime
+                from pathlib import Path
+                desktop_dir = Path.home() / "Desktop"
+                desktop_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                shot_path = desktop_dir / f"screenshot_{ts}.png"
+                pyautogui.screenshot(str(shot_path))
+                self._show_gesture_toast("✌️ Screenshot saved to Desktop!")
+
+        except Exception as e:
+            print(f"[AirGesture] Action '{action}' error: {e}")
+
+    def _show_gesture_toast(self, text: str):
+        try:
+            if hasattr(self, "_status_hint_label"):
+                self._status_hint_label.setText(text)
+                self._status_hint_label.setStyleSheet("color: #ffb347; font-weight: bold;")
+        except Exception:
+            pass
 
     def _render_hand(self, landmarks: list[tuple[float, float, float]], gesture: dict, confidence: float):
         has_hand = bool(landmarks and len(landmarks) >= 21)
@@ -1265,7 +1403,7 @@ class GestureCameraPreview(QFrame):
             self._hand_canvas.set_search_phase(0)
             self._set_status("Hand detected and tracking.", "tracking")
             self._confidence_value.setText(f"{int(confidence * 100)}%")
-            self._gesture_value.setText("Pinch" if gesture.get("pinch") else "Open Hand")
+            self._gesture_value.setText(gesture.get("gesture_name", "Open Hand"))
             self._cursor_value.setText("Active" if gesture.get("cursor") else "Inactive")
         else:
             self._hand_canvas.set_hand_visible(False)
@@ -1285,22 +1423,25 @@ class GestureCameraPreview(QFrame):
         if self._invert_cursor_y:
             raw_y = 1.0 - raw_y
 
-        raw_x = max(0.0, min(1.0, raw_x))
-        raw_y = max(0.0, min(1.0, raw_y))
+        try:
+            s = float(self._sensitivity)
+        except Exception:
+            s = 2.5
 
-        if self._cursor_anchor is None:
-            self._cursor_anchor = (raw_x, raw_y)
-            return (raw_x, raw_y)
+        # Expand central active range so comfortable hand movements easily reach 0.0 and 1.0 edges
+        mapped_x = (raw_x - 0.5) * s + 0.5
+        mapped_y = (raw_y - 0.5) * s + 0.5
 
-        anchor_x, anchor_y = self._cursor_anchor
-        mapped_x = raw_x
-        mapped_y = raw_y
+        mapped_x = max(0.0, min(1.0, mapped_x))
+        mapped_y = max(0.0, min(1.0, mapped_y))
 
         if self._smoothed_cursor is None:
             self._smoothed_cursor = (mapped_x, mapped_y)
         else:
             sx, sy = self._smoothed_cursor
-            a = self._smoothing_alpha
+            dist = math.hypot(mapped_x - sx, mapped_y - sy)
+            # Dynamic smoothing: high responsiveness for quick movements to reach screen corners instantly
+            a = max(0.60, min(0.95, 0.60 + dist * 2.5))
             self._smoothed_cursor = (sx + a * (mapped_x - sx), sy + a * (mapped_y - sy))
 
         return self._smoothed_cursor
@@ -1311,47 +1452,35 @@ class GestureCameraPreview(QFrame):
     def _move_cursor(self, cursor):
         try:
             import pyautogui
-            screen = QApplication.primaryScreen()
-            if screen is None:
-                return
-            geom = screen.geometry()
-            if not geom.isValid():
-                return
+            pyautogui.PAUSE = 0
 
             try:
-                s = float(self._sensitivity)
+                import ctypes
+                screen_w = int(ctypes.windll.user32.GetSystemMetrics(0))
+                screen_h = int(ctypes.windll.user32.GetSystemMetrics(1))
             except Exception:
-                s = 1.0
+                screen_w, screen_h = pyautogui.size()
 
-            nx = float(cursor[0])
-            ny = float(cursor[1])
-            nx = max(0.0, min(1.0, nx))
-            ny = max(0.0, min(1.0, ny))
+            if screen_w <= 0 or screen_h <= 0:
+                screen_w, screen_h = pyautogui.size()
 
-            x = int(geom.left() + nx * geom.width())
-            y = int(geom.top() + ny * geom.height())
+            nx = max(0.0, min(1.0, float(cursor[0])))
+            ny = max(0.0, min(1.0, float(cursor[1])))
 
-            if self._smoothed_screen is None:
-                self._smoothed_screen = (float(x), float(y))
-            else:
-                sx, sy = self._smoothed_screen
-                a = max(0.18, min(0.36, self._smoothing_alpha))
-                self._smoothed_screen = (sx + a * (x - sx), sy + a * (y - sy))
+            target_x = int(round(nx * (screen_w - 1)))
+            target_y = int(round(ny * (screen_h - 1)))
 
-            target_x = int(round(self._smoothed_screen[0]))
-            target_y = int(round(self._smoothed_screen[1]))
-            dead_zone = max(3, int(min(geom.width(), geom.height()) * 0.004))
+            target_x = max(0, min(screen_w - 1, target_x))
+            target_y = max(0, min(screen_h - 1, target_y))
 
+            dead_zone = 2
             if self._last_screen_pos is not None:
                 last_x, last_y = self._last_screen_pos
                 if abs(target_x - last_x) <= dead_zone and abs(target_y - last_y) <= dead_zone:
                     return
 
             self._last_screen_pos = (target_x, target_y)
-            try:
-                pyautogui.moveTo(target_x, target_y, duration=0)
-            except Exception:
-                pyautogui.moveTo(target_x, target_y, duration=0.01)
+            pyautogui.moveTo(target_x, target_y, _pause=False)
         except Exception:
             pass
 
@@ -1494,16 +1623,16 @@ class HudCanvas(QWidget):
 
     def _accent_color(self) -> QColor:
         if self.muted:
-            return QColor(255, 170, 48, 255)
+            return QColor(255, 179, 0, 255)
         if self.speaking:
-            return QColor(255, 170, 48, 255)
+            return QColor(255, 179, 0, 255)
         if self.state == "LISTENING":
             return QColor(69, 127, 255, 255)
         if self.state == "THINKING":
             return QColor(255, 185, 96, 255)
         if self.state in ("EXECUTING", "PROCESSING"):
-            return QColor(255, 170, 48, 255)
-        return QColor(255, 170, 48, 255)
+            return QColor(255, 179, 0, 255)
+        return QColor(255, 179, 0, 255)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -1539,14 +1668,14 @@ class HudCanvas(QWidget):
             r   = r_face * (1.8 - i * 0.08)
             frc = 1.0 - i / 10
             a   = max(0, min(255, int(self._halo * 0.055 * frc)))
-            col = QColor(255, 170, 48, a)
+            col = QColor(255, 179, 0, a)
             p.setPen(QPen(col, 1.2)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
 
         # pulse rings
         for pr in self._pulses:
             a   = max(0, int(230 * (1.0 - pr / (fw * 0.74))))
-            col = QColor(255, 170, 48, a)
+            col = QColor(255, 179, 0, a)
             p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - pr, cy - pr, pr * 2, pr * 2))
 
@@ -1622,13 +1751,13 @@ class HudCanvas(QWidget):
         # status text
         sy = cy + fw * 0.40
         if self.muted:
-            txt, col = "MIC STATUS\nMUTED", QColor(255, 170, 48, 235)
+            txt, col = "MIC STATUS\nMUTED", QColor(255, 179, 0, 235)
         elif self.speaking:
             txt, col = "MIC STATUS\nSPEAKING", QColor(255, 255, 255, 235)
         elif self.state == "THINKING":
             txt, col = "AI CORE\nTHINKING", QColor(255, 185, 96, 235)
         elif self.state in ("PROCESSING", "EXECUTING"):
-            txt, col = "AI CORE\nEXECUTING", QColor(255, 170, 48, 235)
+            txt, col = "AI CORE\nEXECUTING", QColor(255, 179, 0, 235)
         elif self.state == "LISTENING":
             txt, col = "MIC STATUS\nLISTENING", QColor(69, 127, 255, 220)
         else:
@@ -1752,7 +1881,7 @@ class MessageCard(QFrame):
         }
         bg, fg, border = palette.get(role, palette["system"])
         avatar.setStyleSheet(
-            f"background: {bg}; color: {fg}; border: 1px solid {border}; border-radius: 20px;"
+            f"background: {bg}; color: {fg}; border: 1px solid {border}; border-radius: 17px;"
         )
 
         body = QVBoxLayout()
@@ -1811,7 +1940,7 @@ class TaskCard(QFrame):
                 border-radius: 16px;
             }}
             QFrame#TaskCard:hover {{
-                border: 1px solid rgba(255, 170, 48, 0.28);
+                border: 1px solid rgba(255, 179, 0, 0.28);
             }}
             """
         )
@@ -2021,7 +2150,7 @@ class AttachmentCard(QFrame):
         self.setStyleSheet("""
             QFrame#AttachmentCard {
                 background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255, 170, 48,0.26);
+                border: 1px solid rgba(255, 179, 0,0.26);
                 border-radius: 10px;
             }
         """)
@@ -2031,7 +2160,7 @@ class AttachmentCard(QFrame):
         icon = QLabel("⎙")
         icon.setFixedSize(26, 26)
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("color: #ffaa30; background: rgba(255,255,255,0.03); border-radius: 13px; font-size: 14px;")
+        icon.setStyleSheet("color: #ffb300; background: rgba(255,255,255,0.03); border-radius: 13px; font-size: 14px;")
         lay.addWidget(icon)
         txt = QVBoxLayout()
         txt.setContentsMargins(0, 0, 0, 0)
@@ -2046,14 +2175,14 @@ class AttachmentCard(QFrame):
 
 
 class EventCard(QFrame):
-    def __init__(self, title: str, detail: str, stamp: str, icon: str = "●", accent: str = "#ffaa30", parent=None):
+    def __init__(self, title: str, detail: str, stamp: str, icon: str = "●", accent: str = "#ffb300", parent=None):
         super().__init__(parent)
         self.setObjectName("EventCard")
         self.setStyleSheet(
             f"""
             QFrame#EventCard {{
                 background: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 170, 48,0.15);
+                border: 1px solid rgba(255, 179, 0,0.15);
                 border-radius: 12px;
             }}
             """
@@ -2092,7 +2221,7 @@ class ArtifactCard(QFrame):
             """
             QFrame#ArtifactCard {
                 background: rgba(11, 12, 16, 230);
-                border: 1px solid rgba(255, 170, 48,0.22);
+                border: 1px solid rgba(255, 179, 0,0.22);
                 border-radius: 12px;
             }
             QPushButton {
@@ -2103,8 +2232,8 @@ class ArtifactCard(QFrame):
                 padding: 6px 10px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48,0.08);
-                border: 1px solid rgba(255, 170, 48,0.35);
+                background: rgba(255, 179, 0,0.08);
+                border: 1px solid rgba(255, 179, 0,0.35);
             }
             QPushButton:disabled {
                 color: rgba(255,255,255,0.35);
@@ -2121,7 +2250,7 @@ class ArtifactCard(QFrame):
         badge.setFixedSize(30, 30)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        badge.setStyleSheet("background: rgba(255, 170, 48,0.08); color: #ffaa30; border: 1px solid rgba(255, 170, 48,0.24); border-radius: 15px;")
+        badge.setStyleSheet("background: rgba(255, 179, 0,0.08); color: #ffb300; border: 1px solid rgba(255, 179, 0,0.24); border-radius: 15px;")
         head.addWidget(badge)
 
         meta = QVBoxLayout()
@@ -2182,7 +2311,7 @@ class ChatBubble(QFrame):
         self.setObjectName("ChatBubble")
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
         self.setMinimumHeight(1)
-        bg_style = "background: rgba(15, 15, 15, 0.65); border: 1px solid rgba(255, 180, 0, 0.15); border-radius: 18px;" if role != "user" else "background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px;"
+        bg_style = "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(26, 22, 16, 0.7), stop:1 rgba(14, 11, 7, 0.9)); border: 1px solid rgba(255, 179, 0, 0.22); border-radius: 16px;" if role != "user" else "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255, 255, 255, 0.03), stop:1 rgba(255, 255, 255, 0.06)); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px;"
         self.setStyleSheet(f"QFrame#ChatBubble {{ {bg_style} }}")
 
         outer = QVBoxLayout(self)
@@ -2194,7 +2323,7 @@ class ChatBubble(QFrame):
         head.setSpacing(10)
 
         if role == "assistant":
-            avatar = _framed_logo(24, 24, bg="rgba(12,14,20,245)", border="rgba(255,170,48,0.50)", radius=12, inset=4)
+            avatar = _framed_logo(24, 24, bg="rgba(12,14,20,245)", border="rgba(255,179,0,0.50)", radius=12, inset=4)
             head.addWidget(avatar)
             name_lbl = QLabel(name or "Brahma Echo")
             name_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -2315,12 +2444,12 @@ class HistoryConversationItem(QFrame):
             """
             QFrame#HistoryConversationItem {
                 background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255, 170, 48,0.18);
+                border: 1px solid rgba(255, 179, 0,0.18);
                 border-radius: 10px;
             }
             QFrame#HistoryConversationItem:hover {
-                background: rgba(255, 170, 48,0.07);
-                border: 1px solid rgba(255, 170, 48,0.32);
+                background: rgba(255, 179, 0,0.07);
+                border: 1px solid rgba(255, 179, 0,0.32);
             }
             """
         )
@@ -2331,7 +2460,7 @@ class HistoryConversationItem(QFrame):
         icon = QLabel("B")
         icon.setFixedSize(30, 30)
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("background: rgba(255, 170, 48,0.10); color: #ffaa30; border: 1px solid rgba(255, 170, 48,0.28); border-radius: 15px; font: 700 11pt 'Segoe UI';")
+        icon.setStyleSheet("background: rgba(255, 179, 0,0.10); color: #ffb300; border: 1px solid rgba(255, 179, 0,0.28); border-radius: 15px; font: 700 11pt 'Segoe UI';")
         lay.addWidget(icon)
 
         meta = QVBoxLayout()
@@ -2378,7 +2507,7 @@ class ConversationFeed(QScrollArea):
                 margin: 6px 0 6px 0;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 170, 48,0.45);
+                background: rgba(255, 179, 0,0.45);
                 border-radius: 4px;
                 min-height: 24px;
             }
@@ -2402,7 +2531,7 @@ class ConversationFeed(QScrollArea):
             """
             QFrame {
                 background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255, 170, 48,0.16);
+                border: 1px solid rgba(255, 179, 0,0.16);
                 border-radius: 14px;
             }
             QPushButton {
@@ -2414,8 +2543,8 @@ class ConversationFeed(QScrollArea):
                 text-align: left;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48,0.08);
-                border: 1px solid rgba(255, 170, 48,0.28);
+                background: rgba(255, 179, 0,0.08);
+                border: 1px solid rgba(255, 179, 0,0.28);
             }
             """
         )
@@ -2497,7 +2626,7 @@ class ConversationFeed(QScrollArea):
         low = (event_type or text or "").lower()
         title = "System Event"
         icon = "●"
-        accent = "#ffaa30"
+        accent = "#ffb300"
         if "discord" in low and "connected" in low:
             title, icon, accent = "Discord Connected", "◉", "#5865F2"
         elif "presentation" in low:
@@ -2581,7 +2710,7 @@ class TaskDock(QFrame):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 rgba(7, 8, 12, 250),
                     stop:1 rgba(3, 4, 6, 245));
-                border-left: 1px solid rgba(255, 170, 48, 0.55);
+                border-left: 1px solid rgba(255, 179, 0, 0.55);
             }}
             """
         )
@@ -2739,12 +2868,12 @@ class WorkspaceSidebar(QWidget):
             QPushButton {
                 background: rgba(15,15,20,220);
                 color: #FFFFFF;
-                border: 1px solid rgba(255, 170, 48,120);
+                border: 1px solid rgba(255, 179, 0,120);
                 border-radius: 10px;
                 padding: 0 12px;
             }
             QPushButton:hover {
-                border: 1px solid rgba(255, 170, 48,200);
+                border: 1px solid rgba(255, 179, 0,200);
             }
             """
         )
@@ -2792,9 +2921,9 @@ class WorkspaceSidebar(QWidget):
         if active:
             return """
                 QPushButton {
-                    background: rgba(255, 170, 48,0.16);
+                    background: rgba(255, 179, 0,0.16);
                     color: #FFFFFF;
-                    border: 1px solid rgba(255, 170, 48,180);
+                    border: 1px solid rgba(255, 179, 0,180);
                     border-radius: 10px;
                     padding: 0 14px;
                 }
@@ -2808,8 +2937,8 @@ class WorkspaceSidebar(QWidget):
                 padding: 0 14px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48,0.08);
-                border: 1px solid rgba(255, 170, 48,120);
+                background: rgba(255, 179, 0,0.08);
+                border: 1px solid rgba(255, 179, 0,120);
             }
         """
 
@@ -2838,8 +2967,8 @@ class WorkspaceSidebar(QWidget):
         self._memory_frame.setStyleSheet(
             """
             QFrame {
-                background: rgba(255, 170, 48,0.05);
-                border: 1px solid rgba(255, 170, 48,0.24);
+                background: rgba(255, 179, 0,0.05);
+                border: 1px solid rgba(255, 179, 0,0.24);
                 border-radius: 12px;
             }
             """
@@ -2882,12 +3011,12 @@ class WorkspaceSidebar(QWidget):
             QLineEdit {
                 background: rgba(10,11,14,205);
                 color: #FFFFFF;
-                border: 1px solid rgba(255, 170, 48,100);
+                border: 1px solid rgba(255, 179, 0,100);
                 border-radius: 12px;
                 padding: 0 12px;
             }
             QLineEdit:focus {
-                border: 1px solid rgba(255, 170, 48,190);
+                border: 1px solid rgba(255, 179, 0,190);
             }
             """
         )
@@ -2907,7 +3036,7 @@ class WorkspaceSidebar(QWidget):
                 margin: 6px 0 6px 0;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 170, 48,0.45);
+                background: rgba(255, 179, 0,0.45);
                 border-radius: 4px;
                 min-height: 24px;
             }
@@ -2969,13 +3098,13 @@ class WorkspaceSidebar(QWidget):
                     widget.setStyleSheet(
                         """
                         QFrame#HistoryConversationItem {
-                            background: rgba(255, 170, 48,0.10);
-                            border: 1px solid rgba(255, 170, 48,0.55);
+                            background: rgba(255, 179, 0,0.10);
+                            border: 1px solid rgba(255, 179, 0,0.55);
                             border-radius: 10px;
                         }
                         QFrame#HistoryConversationItem:hover {
-                            background: rgba(255, 170, 48,0.14);
-                            border: 1px solid rgba(255, 170, 48,0.70);
+                            background: rgba(255, 179, 0,0.14);
+                            border: 1px solid rgba(255, 179, 0,0.70);
                         }
                         """
                     )
@@ -3315,8 +3444,8 @@ class InlineChatWorkspace(QFrame):
                 padding: 0 14px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48,0.08);
-                border: 1px solid rgba(255, 170, 48,0.30);
+                background: rgba(255, 179, 0,0.08);
+                border: 1px solid rgba(255, 179, 0,0.30);
             }
             """
         )
@@ -3328,19 +3457,19 @@ class InlineChatWorkspace(QFrame):
         self._history_btn.setChecked(index == 1)
         if index == 0:
             self._chat_btn.setStyleSheet("""
-                QPushButton { background: rgba(255, 170, 48,0.16); color: #FFFFFF; border: 1px solid rgba(255, 170, 48,180); border-radius: 10px; padding: 0 14px; }
+                QPushButton { background: rgba(255, 179, 0,0.16); color: #FFFFFF; border: 1px solid rgba(255, 179, 0,180); border-radius: 10px; padding: 0 14px; }
             """)
             self._history_btn.setStyleSheet("""
                 QPushButton { background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.82); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0 14px; }
-                QPushButton:hover { background: rgba(255, 170, 48,0.08); border: 1px solid rgba(255, 170, 48,0.30); }
+                QPushButton:hover { background: rgba(255, 179, 0,0.08); border: 1px solid rgba(255, 179, 0,0.30); }
             """)
         else:
             self._history_btn.setStyleSheet("""
-                QPushButton { background: rgba(255, 170, 48,0.16); color: #FFFFFF; border: 1px solid rgba(255, 170, 48,180); border-radius: 10px; padding: 0 14px; }
+                QPushButton { background: rgba(255, 179, 0,0.16); color: #FFFFFF; border: 1px solid rgba(255, 179, 0,180); border-radius: 10px; padding: 0 14px; }
             """)
             self._chat_btn.setStyleSheet("""
                 QPushButton { background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.82); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0 14px; }
-                QPushButton:hover { background: rgba(255, 170, 48,0.08); border: 1px solid rgba(255, 170, 48,0.30); }
+                QPushButton:hover { background: rgba(255, 179, 0,0.08); border: 1px solid rgba(255, 179, 0,0.30); }
             """)
 
     def _build_chat_tab(self) -> QWidget:
@@ -3356,9 +3485,9 @@ class InlineChatWorkspace(QFrame):
         today_pill.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         today_pill.setStyleSheet("""
             QLabel {
-                background: rgba(255, 170, 48, 0.12);
+                background: rgba(255, 179, 0, 0.12);
                 color: rgba(255, 255, 255, 0.85);
-                border: 1px solid rgba(255, 170, 48, 0.25);
+                border: 1px solid rgba(255, 179, 0, 0.25);
                 border-radius: 12px;
                 padding: 4px 14px;
             }
@@ -3375,8 +3504,8 @@ class InlineChatWorkspace(QFrame):
         self._memory_frame.setVisible(False)
         self._memory_frame.setStyleSheet("""
             QFrame {
-                background: rgba(255, 170, 48,0.05);
-                border: 1px solid rgba(255, 170, 48,0.24);
+                background: rgba(255, 179, 0,0.05);
+                border: 1px solid rgba(255, 179, 0,0.24);
                 border-radius: 12px;
             }
         """)
@@ -3406,7 +3535,7 @@ class InlineChatWorkspace(QFrame):
 
         waveform = QLabel("〰〰〰")
         waveform.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        waveform.setStyleSheet("color: #ffaa30; background: transparent; letter-spacing: 2px;")
+        waveform.setStyleSheet("color: #ffb300; background: transparent; letter-spacing: 2px;")
         footer.addWidget(waveform)
         lay.addLayout(footer)
 
@@ -3422,7 +3551,7 @@ class InlineChatWorkspace(QFrame):
         self._search.setPlaceholderText("Search conversations...")
         self._search.setFont(QFont("Segoe UI", 10))
         self._search.setFixedHeight(38)
-        self._search.setStyleSheet("QLineEdit { background: rgba(10,11,14,205); color: #FFFFFF; border: 1px solid rgba(255, 170, 48,100); border-radius: 12px; padding: 0 12px; }")
+        self._search.setStyleSheet("QLineEdit { background: rgba(10,11,14,205); color: #FFFFFF; border: 1px solid rgba(255, 179, 0,100); border-radius: 12px; padding: 0 12px; }")
         self._search.textChanged.connect(self._refresh_history)
         lay.addWidget(self._search)
         self._history_scroll = QScrollArea()
@@ -4177,7 +4306,7 @@ class SetupOverlay(QWidget):
         ring_grad = QRadialGradient(cx, cy, 320.0)
         ring_grad.setColorAt(0.0, QColor(0, 0, 0, 0))
         ring_grad.setColorAt(0.7, QColor(0, 0, 0, 0))
-        ring_grad.setColorAt(0.85, QColor(255, 170, 48, 12))
+        ring_grad.setColorAt(0.85, QColor(255, 179, 0, 12))
         ring_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setBrush(QBrush(ring_grad))
         painter.drawEllipse(QPointF(cx, cy), 320.0, 320.0)
@@ -4207,7 +4336,7 @@ class SetupOverlay(QWidget):
         self._s1_container.setStyleSheet("""
             QFrame {
                 background: rgba(5, 8, 12, 180);
-                border: 1px solid rgba(255, 170, 48, 0.08);
+                border: 1px solid rgba(255, 179, 0, 0.08);
                 border-radius: 16px;
             }
         """)
@@ -4219,7 +4348,7 @@ class SetupOverlay(QWidget):
         self._s1_lbl = QLabel("")
         self._s1_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self._s1_lbl.setFont(QFont("Consolas", 12))
-        self._s1_lbl.setStyleSheet("color: rgba(255, 170, 48, 0.9); background: transparent; border: none;")
+        self._s1_lbl.setStyleSheet("color: rgba(255, 179, 0, 0.9); background: transparent; border: none;")
         self._s1_lbl.setWordWrap(True)
         clay.addWidget(self._s1_lbl)
 
@@ -4229,11 +4358,11 @@ class SetupOverlay(QWidget):
 
     def _start_stage1(self):
         self._s1_lines = [
-            ("Scanning local configuration...", "#ffaa30", False),
+            ("Scanning local configuration...", "#ffb300", False),
             ("✓  " + self._detected.capitalize() + " detected", "#37ff5f", False),
             ("✓  GPU acceleration enabled", "#37ff5f", False),
             ("✓  Network online", "#37ff5f", False),
-            ("Looking for AI provider...", "#ffaa30", False),
+            ("Looking for AI provider...", "#ffb300", False),
             ("✕  No provider configured", "#ff3b30", True),
             ("", "", False),
             ("One final step is required\nbefore I can think.", "#ffffff", True),
@@ -4297,13 +4426,13 @@ class SetupOverlay(QWidget):
         gem_card.setFixedSize(260, 160)
         gem_card.setStyleSheet("""
             QFrame {
-                background: rgba(255, 170, 48, 0.06);
-                border: 1px solid rgba(255, 170, 48, 0.25);
+                background: rgba(255, 179, 0, 0.06);
+                border: 1px solid rgba(255, 179, 0, 0.25);
                 border-radius: 16px;
             }
             QFrame:hover {
-                background: rgba(255, 170, 48, 0.12);
-                border: 1px solid rgba(255, 170, 48, 0.5);
+                background: rgba(255, 179, 0, 0.12);
+                border: 1px solid rgba(255, 179, 0, 0.5);
             }
         """)
         gem_card.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -4313,12 +4442,12 @@ class SetupOverlay(QWidget):
 
         gt = QLabel("Google Gemini")
         gt.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
-        gt.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+        gt.setStyleSheet("color: #ffb300; background: transparent; border: none;")
         glay.addWidget(gt)
 
         gs = QLabel("★★★★★  Recommended")
         gs.setFont(QFont("Segoe UI", 9))
-        gs.setStyleSheet("color: rgba(255,170,48,0.7); background: transparent; border: none;")
+        gs.setStyleSheet("color: rgba(255,179,0,0.7); background: transparent; border: none;")
         glay.addWidget(gs)
 
         gd = QLabel("Primary Intelligence")
@@ -4330,7 +4459,7 @@ class SetupOverlay(QWidget):
 
         gc = QLabel("Connect →")
         gc.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        gc.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+        gc.setStyleSheet("color: #ffb300; background: transparent; border: none;")
         glay.addWidget(gc)
 
         # Make the whole card clickable via a transparent button overlay
@@ -4408,7 +4537,7 @@ class SetupOverlay(QWidget):
         self._s3_box.setStyleSheet("""
             QFrame {
                 background: rgba(8, 10, 16, 220);
-                border: 1px solid rgba(255, 170, 48, 0.2);
+                border: 1px solid rgba(255, 179, 0, 0.2);
                 border-radius: 20px;
             }
         """)
@@ -4418,7 +4547,7 @@ class SetupOverlay(QWidget):
 
         self._s3_title = QLabel("Google Gemini")
         self._s3_title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        self._s3_title.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+        self._s3_title.setStyleSheet("color: #ffb300; background: transparent; border: none;")
         blay.addWidget(self._s3_title)
 
         self._s3_sub = QLabel("Paste your Neural Key")
@@ -4437,17 +4566,17 @@ class SetupOverlay(QWidget):
         self._key_input.setFixedHeight(48)
         self._key_input.setStyleSheet("""
             QLineEdit {
-                background: rgba(255, 170, 48, 0.04);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.25);
+                background: rgba(255, 179, 0, 0.04);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.25);
                 border-radius: 12px;
                 padding: 0 16px;
                 letter-spacing: 1px;
-                selection-background-color: rgba(255, 170, 48, 0.3);
+                selection-background-color: rgba(255, 179, 0, 0.3);
             }
             QLineEdit:focus {
-                border: 1px solid rgba(255, 170, 48, 0.6);
-                background: rgba(255, 170, 48, 0.06);
+                border: 1px solid rgba(255, 179, 0, 0.6);
+                background: rgba(255, 179, 0, 0.06);
             }
         """)
         self._key_input.setText((self._defaults.get("gemini_api_key") or "").strip())
@@ -4457,7 +4586,7 @@ class SetupOverlay(QWidget):
         toggle_pw = QPushButton("👁")
         toggle_pw.setCursor(Qt.CursorShape.PointingHandCursor)
         toggle_pw.setFixedSize(36, 48)
-        toggle_pw.setStyleSheet("QPushButton { background: transparent; border: none; color: rgba(255,255,255,0.3); font-size: 16px; } QPushButton:hover { color: #ffaa30; }")
+        toggle_pw.setStyleSheet("QPushButton { background: transparent; border: none; color: rgba(255,255,255,0.3); font-size: 16px; } QPushButton:hover { color: #ffb300; }")
         def _toggle():
             if self._key_input.echoMode() == QLineEdit.EchoMode.Password:
                 self._key_input.setEchoMode(QLineEdit.EchoMode.Normal)
@@ -4471,12 +4600,12 @@ class SetupOverlay(QWidget):
         status_row = QHBoxLayout()
         self._s3_status = QLabel("")
         self._s3_status.setFont(QFont("Consolas", 10))
-        self._s3_status.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+        self._s3_status.setStyleSheet("color: #ffb300; background: transparent; border: none;")
         status_row.addWidget(self._s3_status)
 
         status_row.addStretch()
 
-        hint = QLabel("<a href='https://aistudio.google.com/app/apikey' style='color: rgba(255,170,48,0.5); text-decoration: none; font-size: 10px;'>Get API Key →</a>")
+        hint = QLabel("<a href='https://aistudio.google.com/app/apikey' style='color: rgba(255,179,0,0.5); text-decoration: none; font-size: 10px;'>Get API Key →</a>")
         hint.setOpenExternalLinks(True)
         hint.setStyleSheet("background: transparent; border: none;")
         status_row.addWidget(hint)
@@ -4500,7 +4629,7 @@ class SetupOverlay(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if txt == "I'm Brahma Echo.":
                 lbl.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-                lbl.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+                lbl.setStyleSheet("color: #ffb300; background: transparent; border: none;")
             else:
                 lbl.setFont(QFont("Segoe UI", 14))
                 lbl.setStyleSheet("color: rgba(255,255,255,0.6); background: transparent; border: none;")
@@ -4516,14 +4645,14 @@ class SetupOverlay(QWidget):
         self._launch_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         self._launch_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 170, 48, 0.1);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.4);
+                background: rgba(255, 179, 0, 0.1);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.4);
                 border-radius: 24px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48, 0.25);
-                border: 1px solid #ffaa30;
+                background: rgba(255, 179, 0, 0.25);
+                border: 1px solid #ffb300;
             }
         """)
         self._launch_btn.hide()
@@ -4537,7 +4666,7 @@ class SetupOverlay(QWidget):
             self._authenticating = True
             self._key_input.setReadOnly(True)
             self._s3_sub.setText("Authenticating...")
-            self._s3_sub.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+            self._s3_sub.setStyleSheet("color: #ffb300; background: transparent; border: none;")
             self._auth_step = 0
             self._auth_timer = QTimer(self)
             self._auth_timer.timeout.connect(self._auth_tick)
@@ -4594,7 +4723,7 @@ class SetupOverlay(QWidget):
         self._or_prompt_widget.setStyleSheet("""
             QFrame {
                 background: rgba(8, 10, 16, 220);
-                border: 1px solid rgba(255, 170, 48, 0.15);
+                border: 1px solid rgba(255, 179, 0, 0.15);
                 border-radius: 20px;
             }
         """)
@@ -4644,15 +4773,15 @@ class SetupOverlay(QWidget):
         yes_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         yes_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 170, 48, 0.1);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.35);
+                background: rgba(255, 179, 0, 0.1);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.35);
                 border-radius: 12px;
                 padding: 0 24px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48, 0.2);
-                border: 1px solid rgba(255, 170, 48, 0.6);
+                background: rgba(255, 179, 0, 0.2);
+                border: 1px solid rgba(255, 179, 0, 0.6);
             }
         """)
         yes_btn.clicked.connect(self._show_or_input)
@@ -4663,10 +4792,10 @@ class SetupOverlay(QWidget):
         lay.insertWidget(lay.count() - 1, self._or_prompt_widget, 0, Qt.AlignmentFlag.AlignCenter)
 
     def _skip_or(self):
-        """User chose to skip OpenRouter, go straight to intro."""
+        """User chose to skip OpenRouter, go to color selection."""
         self._or_key_value = ""
         self._or_prompt_widget.hide()
-        self._show_intro_final()
+        self._show_color_stage()
 
     def _show_or_input(self):
         """User wants to add OpenRouter."""
@@ -4679,7 +4808,7 @@ class SetupOverlay(QWidget):
         self._or_box.setStyleSheet("""
             QFrame {
                 background: rgba(8, 10, 16, 220);
-                border: 1px solid rgba(255, 170, 48, 0.2);
+                border: 1px solid rgba(255, 179, 0, 0.2);
                 border-radius: 20px;
             }
         """)
@@ -4714,7 +4843,7 @@ class SetupOverlay(QWidget):
                 letter-spacing: 1px;
             }
             QLineEdit:focus {
-                border: 1px solid rgba(255, 170, 48, 0.5);
+                border: 1px solid rgba(255, 179, 0, 0.5);
             }
         """)
         self._or_input.setText((self._defaults.get("openrouter_api_key") or "").strip())
@@ -4740,15 +4869,15 @@ class SetupOverlay(QWidget):
         or_save.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         or_save.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 170, 48, 0.1);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.35);
+                background: rgba(255, 179, 0, 0.1);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.35);
                 border-radius: 12px;
                 padding: 0 24px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48, 0.2);
-                border: 1px solid rgba(255, 170, 48, 0.6);
+                background: rgba(255, 179, 0, 0.2);
+                border: 1px solid rgba(255, 179, 0, 0.6);
             }
         """)
         or_save.clicked.connect(self._save_or_key)
@@ -4761,6 +4890,99 @@ class SetupOverlay(QWidget):
     def _save_or_key(self):
         self._or_key_value = self._or_input.text().strip()
         self._or_box.hide()
+        self._show_color_stage()
+
+    def _show_color_stage(self):
+        """Show color selection."""
+        page = self._stack.widget(2)
+        lay = page.layout()
+
+        self._color_box = QFrame()
+        self._color_box.setFixedSize(480, 230)
+        self._color_box.setStyleSheet("""
+            QFrame {
+                background: rgba(8, 10, 16, 220);
+                border: 1px solid rgba(255, 179, 0, 0.2);
+                border-radius: 20px;
+            }
+        """)
+        c_blay = QVBoxLayout(self._color_box)
+        c_blay.setContentsMargins(32, 28, 32, 28)
+        c_blay.setSpacing(6)
+
+        c_title = QLabel("CHOOSE AESTHETIC")
+        c_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        c_title.setStyleSheet("color: rgba(255,255,255,0.8); background: transparent; border: none;")
+        c_blay.addWidget(c_title)
+
+        c_sub = QLabel("Select your preferred neural color palette.")
+        c_sub.setFont(QFont("Segoe UI", 10))
+        c_sub.setStyleSheet("color: rgba(255,255,255,0.4); background: transparent; border: none;")
+        c_blay.addWidget(c_sub)
+
+        c_blay.addSpacing(12)
+        
+        self._setup_color_btn = QPushButton("Pick Custom Color")
+        self._setup_color_btn.setFixedHeight(48)
+        self._setup_color_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self._setup_color_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PRI};
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 12px;
+            }}
+        """)
+        self._setup_color_btn.clicked.connect(self._pick_setup_color)
+        c_blay.addWidget(self._setup_color_btn)
+
+        c_blay.addStretch()
+
+        c_btn_row = QHBoxLayout()
+        c_btn_row.addStretch()
+        c_continue = QPushButton("Continue →")
+        c_continue.setCursor(Qt.CursorShape.PointingHandCursor)
+        c_continue.setFixedHeight(42)
+        c_continue.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        c_continue.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 179, 0, 0.1);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.35);
+                border-radius: 12px;
+                padding: 0 24px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 179, 0, 0.2);
+                border: 1px solid rgba(255, 179, 0, 0.6);
+            }
+        """)
+        c_continue.clicked.connect(self._finish_color_stage)
+        c_btn_row.addWidget(c_continue)
+        
+        c_blay.addLayout(c_btn_row)
+
+        lay.insertWidget(lay.count() - 1, self._color_box, 0, Qt.AlignmentFlag.AlignCenter)
+        
+    def _pick_setup_color(self):
+        color = QColorDialog.getColor(QColor(C.PRI), self, "Select App Theme Color")
+        if color.isValid():
+            hex_col = color.name()
+            self._setup_color_btn.setStyleSheet(f"QPushButton {{ background: {hex_col}; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 12px; }}")
+            try:
+                settings = {}
+                if APP_SETTINGS_FILE.exists():
+                    with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                settings["app_theme"] = hex_col
+                with open(APP_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(settings, f, indent=4)
+                C.load_theme(hex_col)
+            except:
+                pass
+                
+    def _finish_color_stage(self):
+        self._color_box.hide()
         self._show_intro_final()
 
     def _show_intro_final(self):
@@ -4811,7 +5033,7 @@ class SetupOverlay(QWidget):
         self._s4_container.setStyleSheet("""
             QFrame {
                 background: rgba(5, 8, 12, 180);
-                border: 1px solid rgba(255, 170, 48, 0.12);
+                border: 1px solid rgba(255, 179, 0, 0.12);
                 border-radius: 16px;
             }
         """)
@@ -4822,7 +5044,7 @@ class SetupOverlay(QWidget):
         self._s4_title = QLabel("ESTABLISHING NEURAL LINK")
         self._s4_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._s4_title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self._s4_title.setStyleSheet("color: rgba(255,170,48,0.7); background: transparent; border: none; letter-spacing: 3px;")
+        self._s4_title.setStyleSheet("color: rgba(255,179,0,0.7); background: transparent; border: none; letter-spacing: 3px;")
         c4lay.addWidget(self._s4_title)
         c4lay.addSpacing(12)
 
@@ -4837,7 +5059,7 @@ class SetupOverlay(QWidget):
 
             bar_lbl = QLabel("░░░░░░░░░░")
             bar_lbl.setFont(QFont("Consolas", 11))
-            bar_lbl.setStyleSheet("color: rgba(255,170,48,0.15); background: transparent; border: none;")
+            bar_lbl.setStyleSheet("color: rgba(255,179,0,0.15); background: transparent; border: none;")
             row.addWidget(bar_lbl)
             row.addStretch()
 
@@ -4862,9 +5084,9 @@ class SetupOverlay(QWidget):
         if self._ignite_step < len(self._module_order):
             mod = self._module_order[self._ignite_step]
             name_lbl, bar_lbl = self._module_labels[mod]
-            name_lbl.setStyleSheet("color: #ffaa30; background: transparent; border: none; font-weight: bold;")
+            name_lbl.setStyleSheet("color: #ffb300; background: transparent; border: none; font-weight: bold;")
             bar_lbl.setText("██████████")
-            bar_lbl.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+            bar_lbl.setStyleSheet("color: #ffb300; background: transparent; border: none;")
             self._call_js(f"if(window.setReactorSpeed) window.setReactorSpeed({5.0 + self._ignite_step * 4});")
             self._call_js("if(window.triggerPulse) window.triggerPulse();")
             self._ignite_step += 1
@@ -4904,11 +5126,11 @@ class CommandBar(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setObjectName("CommandBar")
-        self.setFixedSize(580, 62)
+        self.setFixedSize(580, 48)
         self.setStyleSheet("background: transparent;")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
+        root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(0)
 
         frame = QFrame()
@@ -4920,50 +5142,50 @@ class CommandBar(QWidget):
                     stop:0.3 rgba(12, 11, 16, 252),
                     stop:0.7 rgba(12, 11, 16, 252),
                     stop:1 rgba(6, 6, 10, 252));
-                border: 1px solid rgba(255, 170, 48, 0.18);
-                border-radius: 25px;
+                border: 1px solid rgba(255, 179, 0, 0.22);
+                border-radius: 20px;
             }}
         """)
         lay = QHBoxLayout(frame)
-        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(6)
 
         # Brahma Echo mini logo
         logo_frame = QFrame()
-        logo_frame.setFixedSize(38, 38)
+        logo_frame.setFixedSize(32, 32)
         logo_frame.setStyleSheet("""
             QFrame {
-                background: rgba(255, 170, 48, 0.06);
-                border: 1px solid rgba(255, 170, 48, 0.2);
-                border-radius: 19px;
+                background: rgba(255, 179, 0, 0.06);
+                border: 1px solid rgba(255, 179, 0, 0.25);
+                border-radius: 16px;
             }
         """)
         logo_lay = QVBoxLayout(logo_frame)
         logo_lay.setContentsMargins(0, 0, 0, 0)
         logo_lbl = QLabel("\u092C\u094D\u0930")  # ब्र (short Hindi)
         logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_lbl.setFont(QFont("Nirmala UI", 10, QFont.Weight.Bold))
-        logo_lbl.setStyleSheet("color: #ffaa30; background: transparent; border: none;")
+        logo_lbl.setFont(QFont("Nirmala UI", 9, QFont.Weight.Bold))
+        logo_lbl.setStyleSheet("color: #ffb300; background: transparent; border: none;")
         logo_lay.addWidget(logo_lbl)
         lay.addWidget(logo_frame)
 
         # Input field
         self._input = QLineEdit()
         self._input.setPlaceholderText("Tell Brahma Echo what to do...")
-        self._input.setFont(QFont("Segoe UI", 10))
-        self._input.setFixedHeight(38)
+        self._input.setFont(QFont("Segoe UI", 9))
+        self._input.setFixedHeight(32)
         self._input.setStyleSheet(f"""
             QLineEdit {{
                 background: rgba(255, 255, 255, 0.03);
                 color: {C.WHITE};
                 border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 19px;
-                padding: 0 18px;
-                selection-background-color: rgba(255, 170, 48, 0.25);
+                border-radius: 16px;
+                padding: 0 14px;
+                selection-background-color: rgba(255, 179, 0, 0.25);
             }}
             QLineEdit:focus {{
-                border: 1px solid rgba(255, 170, 48, 0.4);
-                background: rgba(255, 170, 48, 0.03);
+                border: 1px solid rgba(255, 179, 0, 0.45);
+                background: rgba(255, 179, 0, 0.03);
             }}
         """)
         self._input.returnPressed.connect(self._submit)
@@ -4975,52 +5197,52 @@ class CommandBar(QWidget):
                 background: rgba(255, 255, 255, 0.03);
                 color: rgba(255, 255, 255, 0.5);
                 border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 17px;
+                border-radius: 14px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.1);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.35);
+                background: rgba(255, 179, 0, 0.12);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.4);
             }}
         """
 
         attach = QPushButton()
-        attach.setFixedSize(34, 34)
+        attach.setFixedSize(28, 28)
         attach.setCursor(Qt.CursorShape.PointingHandCursor)
         attach.setToolTip("Attach file")
-        attach.setIcon(QIcon(_icon_pixmap("attach", 15)))
-        attach.setIconSize(QSize(15, 15))
+        attach.setIcon(QIcon(_icon_pixmap("attach", 13)))
+        attach.setIconSize(QSize(13, 13))
         attach.setStyleSheet(btn_style_ghost)
         attach.clicked.connect(self.attach_clicked.emit)
         lay.addWidget(attach)
 
         mic = QPushButton()
-        mic.setFixedSize(34, 34)
+        mic.setFixedSize(28, 28)
         mic.setCursor(Qt.CursorShape.PointingHandCursor)
         mic.setToolTip("Voice input")
-        mic.setIcon(QIcon(_icon_pixmap("mic", 15)))
-        mic.setIconSize(QSize(15, 15))
+        mic.setIcon(QIcon(_icon_pixmap("mic", 13)))
+        mic.setIconSize(QSize(13, 13))
         mic.setStyleSheet(btn_style_ghost)
         mic.clicked.connect(self.mic_clicked.emit)
         lay.addWidget(mic)
 
         dev = QPushButton("DEV")
-        dev.setFixedSize(46, 34)
+        dev.setFixedSize(40, 28)
         dev.setCursor(Qt.CursorShape.PointingHandCursor)
         dev.setToolTip("Developer mode")
         dev.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(255, 170, 48, 0.06);
-                color: rgba(255, 170, 48, 0.7);
-                border: 1px solid rgba(255, 170, 48, 0.2);
-                border-radius: 17px;
+                background: rgba(255, 179, 0, 0.06);
+                color: rgba(255, 179, 0, 0.7);
+                border: 1px solid rgba(255, 179, 0, 0.25);
+                border-radius: 14px;
                 font: 700 8px 'Segoe UI';
-                letter-spacing: 1px;
+                letter-spacing: 0.5px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.15);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.5);
+                background: rgba(255, 179, 0, 0.15);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.5);
             }}
         """)
         dev.clicked.connect(self.developer_clicked.emit)
@@ -5028,21 +5250,21 @@ class CommandBar(QWidget):
 
         # Send button — golden accent
         send = QPushButton()
-        send.setFixedSize(38, 38)
+        send.setFixedSize(32, 32)
         send.setCursor(Qt.CursorShape.PointingHandCursor)
         send.setToolTip("Send")
-        send.setIcon(QIcon(_icon_pixmap("send", 16)))
-        send.setIconSize(QSize(16, 16))
+        send.setIcon(QIcon(_icon_pixmap("send", 14)))
+        send.setIconSize(QSize(14, 14))
         send.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(255, 170, 48, 0.12);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.35);
+                background: rgba(255, 179, 0, 0.12);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.35);
                 border-radius: 19px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.25);
-                border: 1px solid #ffaa30;
+                background: rgba(255, 179, 0, 0.25);
+                border: 1px solid #ffb300;
             }}
         """)
         send.clicked.connect(self._submit)
@@ -6225,8 +6447,10 @@ class FloatingLauncher(QWidget):
         w, h = self.width(), self.height()
         cx, cy = w / 2.0, h / 2.0
 
-        # Always gold
-        ar, ag, ab = 255, 170, 48
+        try:
+            ar, ag, ab = int(C.PRI[1:3], 16), int(C.PRI[3:5], 16), int(C.PRI[5:7], 16)
+        except Exception:
+            ar, ag, ab = 255, 179, 0
         breath = self._breath_val
         hover_boost = 1.4 if self._hovered else 1.0
 
@@ -6267,7 +6491,8 @@ class FloatingLauncher(QWidget):
 
         # Ring 3: Fast thin inner arc
         a3 = int((50 + breath * 40) * hover_boost)
-        pen3 = QPen(QColor(255, 220, 130, min(255, a3)), 0.9)
+        c3 = QColor(ar, ag, ab).lighter(140)
+        pen3 = QPen(QColor(c3.red(), c3.green(), c3.blue(), min(255, a3)), 0.9)
         pen3.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen3)
         rect3 = QRectF(cx - 30, cy - 30, 60, 60)
@@ -6305,7 +6530,8 @@ class FloatingLauncher(QWidget):
                 hx, hy = trail[-1]
                 head_alpha = int((120 + breath * 130) * hover_boost)
                 head_size = 1.8 + (i % 2) * 0.6
-                painter.setBrush(QBrush(QColor(255, 220, 140, min(255, head_alpha))))
+                chead = QColor(ar, ag, ab).lighter(150)
+                painter.setBrush(QBrush(QColor(chead.red(), chead.green(), chead.blue(), min(255, head_alpha))))
                 painter.drawEllipse(QPointF(hx, hy), head_size, head_size)
 
         # ── 6. Hindi Brahma Echo text "ब्रह्मा इको" ──
@@ -6317,8 +6543,7 @@ class FloatingLauncher(QWidget):
         painter.end()
 
     def _get_accent_color(self):
-        # Always gold
-        return "#ffaa30"
+        return C.PRI
 
     def _hex_to_rgb(self, hex_color):
         hex_color = hex_color.lstrip('#')
@@ -6472,6 +6697,54 @@ class FloatingLauncher(QWidget):
         super().leaveEvent(event)
 
 
+
+class FloatingGestureCard(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(8)
+        
+        self.btn = QPushButton("🖐 Gestures")
+        self.btn.setFixedSize(100, 36)
+        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn.setStyleSheet(
+            "QPushButton { background: #0c0e12; color: #ffffff; border: 1px solid rgba(255, 179, 0, 0.20); border-radius: 8px; font-weight: bold; }"
+            "QPushButton:hover { color: #ffb300; border: 1px solid #ffb300; }"
+        )
+        self.btn.clicked.connect(self.toggle_preview)
+        
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch(1)
+        btn_lay.addWidget(self.btn)
+        self.lay.addLayout(btn_lay)
+        
+        self.preview = GestureCameraPreview()
+        self.preview.setFixedSize(280, 210)
+        self.preview.hide()
+        
+        self.lay.addWidget(self.preview)
+        
+    def toggle_preview(self):
+        if self.preview.isVisible():
+            self.preview.hide()
+            self.preview._stop_camera()
+            self.btn.setStyleSheet(
+                "QPushButton { background: #0c0e12; color: #ffffff; border: 1px solid rgba(255, 179, 0, 0.20); border-radius: 8px; font-weight: bold; }"
+                "QPushButton:hover { color: #ffb300; border: 1px solid #ffb300; }"
+            )
+        else:
+            self.preview.show()
+            self.preview._start_camera()
+            self.btn.setStyleSheet(
+                "QPushButton { background: rgba(255, 179, 0, 0.15); color: #ffb300; border: 1px solid #ffb300; border-radius: 8px; font-weight: bold; }"
+                "QPushButton:hover { background: rgba(255, 179, 0, 0.25); }"
+            )
+        self.adjustSize()
+        if self.window() and hasattr(self.window(), 'resizeEvent'):
+            self.window().resizeEvent(None)
+
+
 class MainWindow(QMainWindow):
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
@@ -6535,17 +6808,39 @@ class MainWindow(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        self._left_panel = self._build_left_panel_modern()
-        body.addWidget(self._left_panel, stretch=0)
-        _attach_pulse_glow(self._left_panel, color=C.PRI, blur_min=8.0, blur_max=18.0, alpha=55, period_ms=3600)
+        self._taskbar = QWidget()
+        self._taskbar.setStyleSheet("background: transparent;")
+        taskbar_lay = QHBoxLayout(self._taskbar)
+        taskbar_lay.setContentsMargins(10, 10, 10, 10)
+        
+        self._btn_dashboard = QPushButton("Dashboard")
+        self._btn_chat = QPushButton("Chat")
+        self._btn_settings = QPushButton("Settings")
+
+        for btn in (self._btn_dashboard, self._btn_chat, self._btn_settings):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"QPushButton {{ background: rgba(12,14,18,200); color: {C.WHITE}; border: 1px solid {C.BORDER_B}; border-radius: 8px; padding: 5px 15px; font-weight: bold; font-family: 'Segoe UI'; font-size: 13px; }} QPushButton:hover {{ color: {C.PRI}; border: 1px solid {C.PRI}; }}")
+        
+        taskbar_lay.addStretch()
+        taskbar_lay.addWidget(self._btn_dashboard)
+        taskbar_lay.addWidget(self._btn_chat)
+        taskbar_lay.addWidget(self._btn_settings)
+        taskbar_lay.addStretch()
+        
+        root.addWidget(self._taskbar)
+
+        self._floating_gesture_card = FloatingGestureCard(self.centralWidget())
+        self._floating_gesture_card.show()
 
         self._center_panel = self._build_center_panel_modern(face_path)
         body.addWidget(self._center_panel, stretch=1)
         _attach_pulse_glow(self._center_panel, color=C.PRI, blur_min=6.0, blur_max=14.0, alpha=36, period_ms=4200)
 
-        self._right_panel = self._build_right_panel_modern()
-        body.addWidget(self._right_panel, stretch=0)
-        _attach_pulse_glow(self._right_panel, color=C.PRI, blur_min=8.0, blur_max=18.0, alpha=55, period_ms=3900)
+
+
+        self._btn_dashboard.clicked.connect(lambda: self._center_stack.setCurrentIndex(0))
+        self._btn_chat.clicked.connect(lambda: self._center_stack.setCurrentIndex(4))
+        self._btn_settings.clicked.connect(lambda: self._center_stack.setCurrentIndex(5))
 
         root.addLayout(body, stretch=1)
 
@@ -6613,7 +6908,7 @@ class MainWindow(QMainWindow):
             try:
                 data = json.loads(APP_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    settings.update(data)
             except Exception:
                 pass
         self._app_settings_cache = dict(settings)
@@ -6667,7 +6962,7 @@ class MainWindow(QMainWindow):
             try:
                 data = json.loads(DISCORD_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    settings.update(data)
             except Exception:
                 pass
         if (settings.get("bot_token") or "").strip():
@@ -6943,7 +7238,8 @@ class MainWindow(QMainWindow):
                 self._devices_page.refresh(force=True)
 
     def resizeEvent(self, event):
-        super().resizeEvent(event)
+        if event:
+            super().resizeEvent(event)
         if self._overlay and self._overlay.isVisible():
             size = self._overlay.sizeHint()
             ow = max(360, size.width() or self._overlay.width() or 460)
@@ -6954,6 +7250,9 @@ class MainWindow(QMainWindow):
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
+        if hasattr(self, '_floating_gesture_card') and self.centralWidget():
+            cw = self.centralWidget()
+            self._floating_gesture_card.move(cw.width() - self._floating_gesture_card.width() - 30, 20)
 
     def _update_metrics(self):
         if not hasattr(self, "_bar_cpu"):
@@ -7928,12 +8227,12 @@ class MainWindow(QMainWindow):
             def set_active(self, active: bool):
                 self._active = bool(active)
                 bg_style = "rgba(255, 255, 255, 0.05)" if self._active else "transparent"
-                border_left = "2px solid #ffaa30" if self._active else "2px solid transparent"
+                border_left = "2px solid #ffb300" if self._active else "2px solid transparent"
                 self.setStyleSheet(
                     f"""
                     QFrame#LeftNavItem {{
                         background: {bg_style};
-                        border: 1px solid rgba(255, 170, 48, { '0.15' if self._active else '0.0' });
+                        border: 1px solid rgba(255, 179, 0, { '0.15' if self._active else '0.0' });
                         border-left: {border_left};
                         border-radius: 12px;
                         margin: 2px 8px;
@@ -7941,9 +8240,9 @@ class MainWindow(QMainWindow):
                     """
                 )
                 if self._active:
-                    self._icon.setStyleSheet("background: rgba(255, 170, 48, 0.25); color: #ffaa30; border-radius: 8px; border: 1px solid #ffaa30;")
+                    self._icon.setStyleSheet("background: rgba(255, 179, 0, 0.25); color: #ffb300; border-radius: 8px; border: 1px solid #ffb300;")
                     self._lbl.setStyleSheet("color: #ffffff; background: transparent; font-weight: bold;")
-                    self._arrow.setStyleSheet("color: #ffaa30; background: transparent; font-weight: bold;")
+                    self._arrow.setStyleSheet("color: #ffb300; background: transparent; font-weight: bold;")
                 else:
                     self._icon.setStyleSheet("background: rgba(255, 255, 255, 0.03); color: rgba(255, 255, 255, 0.6); border-radius: 8px; border: 1px solid transparent;")
                     self._lbl.setStyleSheet("color: rgba(255, 255, 255, 0.65); background: transparent;")
@@ -7956,7 +8255,7 @@ class MainWindow(QMainWindow):
             def enterEvent(self, event):
                 super().enterEvent(event)
                 if not self._active:
-                    self._icon.setStyleSheet("background: rgba(255, 170, 48, 0.15); color: #ffaa30; border-radius: 8px; border: 1px solid rgba(255, 170, 48, 0.4);")
+                    self._icon.setStyleSheet("background: rgba(255, 179, 0, 0.15); color: #ffb300; border-radius: 8px; border: 1px solid rgba(255, 179, 0, 0.4);")
                     self._lbl.setStyleSheet("color: #ffffff; background: transparent;")
                     self._hover_anim.stop()
                     self._hover_anim.setStartValue(self._glow_effect.opacity())
@@ -7991,7 +8290,7 @@ class MainWindow(QMainWindow):
         brand_lay.addWidget(_framed_logo(62, 44, bg="rgba(9,10,14,245)", border=C.BORDER_B, radius=10, inset=8))
         brand_text = QVBoxLayout()
         brand_text.setSpacing(2)
-        title = QLabel("<span style='color:#ffaa30;'>BRAHMA ECHO</span><br><span style='color:#ffffff;'>LITE</span>")
+        title = QLabel("<span style='color:#ffb300;'>BRAHMA ECHO</span><br><span style='color:#ffffff;'>LITE</span>")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         title.setStyleSheet("background: transparent;")
         sub = QLabel("Your AI Assistant")
@@ -8027,8 +8326,8 @@ class MainWindow(QMainWindow):
         status_card.setObjectName("LeftStatusCard")
         status_card.setStyleSheet(f"""
             QFrame#LeftStatusCard {{
-                background: rgba(255, 170, 48, 0.03);
-                border: 1px solid rgba(255, 170, 48, 0.6);
+                background: rgba(255, 179, 0, 0.03);
+                border: 1px solid rgba(255, 179, 0, 0.6);
                 border-radius: 16px;
             }}
             QLabel {{
@@ -8039,7 +8338,7 @@ class MainWindow(QMainWindow):
         try:
             shadow = QGraphicsDropShadowEffect(status_card)
             shadow.setBlurRadius(20)
-            shadow.setColor(QColor(255, 170, 48, 80))
+            shadow.setColor(QColor(255, 179, 0, 80))
             shadow.setOffset(0, 0)
             status_card.setGraphicsEffect(shadow)
         except: pass
@@ -8049,7 +8348,7 @@ class MainWindow(QMainWindow):
         
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
-        online = QLabel("<span style='color:#ffaa30;'>●</span> <span style='color:#ffffff; font-weight:700;'>System Online</span>")
+        online = QLabel("<span style='color:#ffb300;'>ΓùÅ</span> <span style='color:#ffffff; font-weight:700;'>System Online</span>")
         online.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         top_row.addWidget(online)
         top_row.addStretch()
@@ -8063,8 +8362,8 @@ class MainWindow(QMainWindow):
 
         metrics_row = QHBoxLayout()
         metrics_row.setSpacing(8)
-        self._bar_cpu = MetricBar("CPU", "#ffaa30")
-        self._bar_mem = MetricBar("RAM", "#ffaa30")
+        self._bar_cpu = MetricBar("CPU", C.PRI)
+        self._bar_mem = MetricBar("RAM", C.PRI)
         metrics_row.addWidget(self._bar_cpu)
         metrics_row.addWidget(self._bar_mem)
         
@@ -8153,6 +8452,21 @@ class MainWindow(QMainWindow):
         self._center_stack.addWidget(self._devices_page)
         self._settings_page = SystemConnectivityPage()
         self._center_stack.addWidget(self._settings_page)
+        
+        chat_page = QWidget()
+        chat_page_lay = QVBoxLayout(chat_page)
+        chat_page_lay.setContentsMargins(10, 10, 10, 10)
+        self._inline_workspace = InlineChatWorkspace()
+        self._inline_workspace.attach_requested.connect(self._browse_attachment)
+        self._inline_workspace.mic_requested.connect(self._toggle_mute)
+        self._inline_workspace.command_submitted.connect(self._send)
+        self._log = self._inline_workspace
+        chat_page_lay.addWidget(self._inline_workspace)
+        self._center_stack.addWidget(chat_page)
+        
+        self._settings_hub_page = SettingsHubPage(lambda idx: self._center_stack.setCurrentIndex(idx))
+        self._center_stack.addWidget(self._settings_hub_page)
+
         self._center_stack.setCurrentIndex(0)
         return self._center_stack
 
@@ -8218,7 +8532,7 @@ class MainWindow(QMainWindow):
             f"""
             QFrame {{
                 background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 170, 48, 0.20);
+                border: 1px solid rgba(255, 179, 0, 0.20);
                 border-radius: 35px;
             }}
             """
@@ -8226,7 +8540,7 @@ class MainWindow(QMainWindow):
         try:
             shadow = QGraphicsDropShadowEffect(bar)
             shadow.setBlurRadius(24)
-            shadow.setColor(QColor(255, 170, 48, 45))
+            shadow.setColor(QColor(255, 179, 0, 45))
             shadow.setOffset(0, 0)
             bar.setGraphicsEffect(shadow)
         except Exception:
@@ -8245,7 +8559,7 @@ class MainWindow(QMainWindow):
                 color: {C.WHITE};
                 border: none;
                 padding: 0 14px;
-                selection-background-color: rgba(255, 170, 48, 0.25);
+                selection-background-color: rgba(255, 179, 0, 0.25);
             }}
         """)
         self._input.returnPressed.connect(self._send)
@@ -8259,11 +8573,11 @@ class MainWindow(QMainWindow):
                 border-radius: 22px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.15);
+                background: rgba(255, 179, 0, 0.15);
                 color: {C.PRI};
             }}
             QPushButton:pressed {{
-                background: rgba(255, 170, 48, 0.30);
+                background: rgba(255, 179, 0, 0.30);
             }}
         """
 
@@ -8285,17 +8599,17 @@ class MainWindow(QMainWindow):
         mic.setIconSize(QSize(20, 20))
         mic.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(255, 170, 48, 0.10);
+                background: rgba(255, 179, 0, 0.10);
                 color: {C.PRI};
-                border: 1px solid rgba(255, 170, 48, 0.30);
+                border: 1px solid rgba(255, 179, 0, 0.30);
                 border-radius: 22px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.25);
-                border: 1px solid rgba(255, 170, 48, 0.60);
+                background: rgba(255, 179, 0, 0.25);
+                border: 1px solid rgba(255, 179, 0, 0.60);
             }}
             QPushButton:pressed {{
-                background: rgba(255, 170, 48, 0.40);
+                background: rgba(255, 179, 0, 0.40);
             }}
         """)
         mic.clicked.connect(self._toggle_mute)
@@ -8322,8 +8636,8 @@ class SystemConnectivitySidebar(QFrame):
         self.setStyleSheet(
             f"""
             QFrame#SystemConnectivitySidebar {{
-                background: rgba(255, 170, 48, 0.03);
-                border: 1px solid rgba(255, 170, 48, 0.6);
+                background: rgba(255, 179, 0, 0.03);
+                border: 1px solid rgba(255, 179, 0, 0.6);
                 border-radius: 22px;
             }}
             QLabel {{
@@ -8338,15 +8652,15 @@ class SystemConnectivitySidebar(QFrame):
                 padding: 10px 12px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.10);
-                border: 1px solid rgba(255, 170, 48, 0.3);
+                background: rgba(255, 179, 0, 0.10);
+                border: 1px solid rgba(255, 179, 0, 0.3);
             }}
             """
         )
         try:
             shadow = QGraphicsDropShadowEffect(self)
             shadow.setBlurRadius(20)
-            shadow.setColor(QColor(255, 170, 48, 80))
+            shadow.setColor(QColor(255, 179, 0, 80))
             shadow.setOffset(0, 0)
             self.setGraphicsEffect(shadow)
         except: pass
@@ -8364,7 +8678,7 @@ class SystemConnectivitySidebar(QFrame):
         s_lay = QVBoxLayout(self._status_card)
         s_lay.setContentsMargins(16, 14, 16, 14)
         s_lay.setSpacing(10)
-        self._online_lbl = QLabel("● System Online")
+        self._online_lbl = QLabel("ΓùÅ System Online")
         self._online_lbl.setStyleSheet("color: #35ff75; font-weight: 700;")
         self._desc_lbl = QLabel("All systems are operational.")
         self._desc_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
@@ -8377,7 +8691,7 @@ class SystemConnectivitySidebar(QFrame):
             row = QHBoxLayout()
             row.setContentsMargins(0, 4, 0, 4)
             row.setSpacing(10)
-            icon = QLabel("◌")
+            icon = QLabel("Γùî")
             icon.setFixedWidth(18)
             icon.setStyleSheet(f"color: {C.WHITE};")
             key_lbl = QLabel(label)
@@ -8400,11 +8714,11 @@ class SystemConnectivitySidebar(QFrame):
         self._quick_actions = QVBoxLayout()
         self._quick_actions.setSpacing(10)
         lay.addLayout(self._quick_actions)
-        self._mk_quick_action("↻ Restart Brahma Echo", QStyle.StandardPixmap.SP_BrowserReload, self._restart)
-        self._mk_quick_action("⟳ Reload Configuration", QStyle.StandardPixmap.SP_BrowserReload, self._reload)
-        self._mk_quick_action("📁 Open Data Folder", QStyle.StandardPixmap.SP_DirOpenIcon, self._open_data_folder)
-        self._mk_quick_action("📄 View Logs", QStyle.StandardPixmap.SP_FileDialogDetailedView, self._view_logs)
-        self._mk_quick_action("⬇ Check for Updates", QStyle.StandardPixmap.SP_ArrowDown, self._check_updates)
+        self._mk_quick_action("Γå╗ Restart Brahma Echo", QStyle.StandardPixmap.SP_BrowserReload, self._restart)
+        self._mk_quick_action("Γƒ│ Reload Configuration", QStyle.StandardPixmap.SP_BrowserReload, self._reload)
+        self._mk_quick_action("≡ƒôü Open Data Folder", QStyle.StandardPixmap.SP_DirOpenIcon, self._open_data_folder)
+        self._mk_quick_action("≡ƒôä View Logs", QStyle.StandardPixmap.SP_FileDialogDetailedView, self._view_logs)
+        self._mk_quick_action("Γ¼ç Check for Updates", QStyle.StandardPixmap.SP_ArrowDown, self._check_updates)
 
         tip = QFrame()
         tip.setStyleSheet("QFrame { background: rgba(24, 18, 8, 0.85); border: 1px solid rgba(255, 191, 0, 0.22); border-radius: 14px; }")
@@ -8484,6 +8798,83 @@ class SystemConnectivitySidebar(QFrame):
             self._info_rows["Last Updated"].setText(time.strftime("%d %b %Y %H:%M"))
 
 
+
+class SettingsHubPage(QWidget):
+    def __init__(self, navigation_callback, parent=None):
+        super().__init__(parent)
+        self._nav_cb = navigation_callback
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(40, 60, 40, 60)
+        lay.setSpacing(25)
+
+        title = QLabel("Settings Hub")
+        title.setFont(QFont("Segoe UI", 32, QFont.Weight.Black))
+        title.setStyleSheet(f"color: {C.WHITE}; letter-spacing: 1px;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        subtitle = QLabel("Select a section below to configure your Brahma Echo environment.")
+        subtitle.setFont(QFont("Segoe UI", 12))
+        subtitle.setStyleSheet(f"color: {C.TEXT_DIM};")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(subtitle)
+
+        cards_lay = QHBoxLayout()
+        cards_lay.setSpacing(24)
+        cards_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        cards_data = [
+            ("Brahma Echo Home", "Configure smart home integrations", "🏠", 1),
+            ("Devices", "Manage and control connected hardware", "🔌", 2),
+            ("System & Connect", "Configure providers and api preferences", "⚙️", 3)
+        ]
+
+        for title_text, desc_text, icon_emoji, target_idx in cards_data:
+            card = QFrame()
+            card.setFixedSize(280, 200)
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setStyleSheet(
+                f"QFrame {{ "
+                f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(16, 18, 26, 0.75), stop:1 rgba(8, 10, 15, 0.85)); "
+                f"  border: 1px solid rgba(255, 179, 0, 0.18); "
+                f"  border-radius: 18px; "
+                f"}} "
+                f"QFrame:hover {{ "
+                f"  border: 1.5px solid {C.PRI}; "
+                f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(35, 28, 15, 0.8), stop:1 rgba(16, 12, 8, 0.9)); "
+                f"}}"
+            )
+            card_lay = QVBoxLayout(card)
+            card_lay.setContentsMargins(20, 20, 20, 20)
+            card_lay.setSpacing(12)
+            card_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            icon_lbl = QLabel(icon_emoji)
+            icon_lbl.setFont(QFont("Segoe UI", 36))
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_lbl.setStyleSheet("background: transparent; border: none;")
+            card_lay.addWidget(icon_lbl)
+
+            t = QLabel(title_text)
+            t.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+            t.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
+            t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_lay.addWidget(t)
+
+            d = QLabel(desc_text)
+            d.setFont(QFont("Segoe UI", 9))
+            d.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            d.setWordWrap(True)
+            d.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_lay.addWidget(d)
+
+            card.mousePressEvent = lambda e, idx=target_idx: self._nav_cb(idx)
+            cards_lay.addWidget(card)
+
+        lay.addStretch(1)
+        lay.addLayout(cards_lay)
+        lay.addStretch(2)
+
 class SystemConnectivityPage(QWidget):
     def __init__(self, controller=None, parent=None):
         super().__init__(parent)
@@ -8494,9 +8885,13 @@ class SystemConnectivityPage(QWidget):
                 background: transparent;
             }}
             QFrame#SettingsCard {{
-                background: transparent;
-                border: 1px solid rgba(255, 255, 255, 0.06);
+                background: rgba(10, 12, 18, 160);
+                border: 1.5px solid rgba(255, 179, 0, 0.15);
                 border-radius: 18px;
+            }}
+            QFrame#SettingsCard:hover {{
+                border: 1.5px solid rgba(255, 179, 0, 0.35);
+                background: rgba(20, 16, 12, 200);
             }}
             QLabel {{
                 background: transparent;
@@ -8509,8 +8904,8 @@ class SystemConnectivityPage(QWidget):
                 padding: 10px 12px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48, 0.10);
-                border: 1px solid rgba(255, 170, 48, 0.3);
+                background: rgba(255, 179, 0, 0.12);
+                border: 1px solid rgba(255, 179, 0, 0.45);
             }}
             QLineEdit, QComboBox {{
                 background: rgba(13, 15, 19, 240);
@@ -8522,6 +8917,7 @@ class SystemConnectivityPage(QWidget):
             }}
             QLineEdit:focus, QComboBox:focus {{
                 border: 1px solid {C.PRI};
+                background: rgba(255, 179, 0, 0.02);
             }}
         """)
         root = QVBoxLayout(self)
@@ -8605,11 +9001,11 @@ class SystemConnectivityPage(QWidget):
                 padding: 12px 14px;
             }}
             QPushButton:checked {{
-                background: rgba(255, 170, 48,0.12);
+                background: rgba(255, 179, 0,0.12);
                 border: 1px solid {C.PRI};
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48,0.08);
+                background: rgba(255, 179, 0,0.08);
             }}
             """
         )
@@ -8620,15 +9016,15 @@ class SystemConnectivityPage(QWidget):
         if not key:
             return "Not set"
         if len(key) <= 8:
-            return "••••••••"
-        return f"{key[:4]}••••••••{key[-4:]}"
+            return "ΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇó"
+        return f"{key[:4]}ΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇó{key[-4:]}"
 
     def _provider_row(self, name: str, key: str, model: str, setting_key: str):
         row = QFrame()
         if key:
             row.setStyleSheet("QFrame { background: rgba(55, 255, 95, 0.02); border: 1px solid rgba(55, 255, 95, 0.1); border-radius: 14px; } QFrame:hover { background: rgba(55, 255, 95, 0.05); border: 1px solid rgba(55, 255, 95, 0.25); }")
         else:
-            row.setStyleSheet("QFrame { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 14px; } QFrame:hover { background: rgba(255, 170, 48, 0.04); border: 1px solid rgba(255, 170, 48, 0.3); }")
+            row.setStyleSheet("QFrame { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 14px; } QFrame:hover { background: rgba(255, 179, 0, 0.04); border: 1px solid rgba(255, 179, 0, 0.3); }")
         r = QHBoxLayout(row)
         r.setContentsMargins(14, 12, 14, 12)
         r.setSpacing(12)
@@ -8639,7 +9035,7 @@ class SystemConnectivityPage(QWidget):
         if key:
             icon.setStyleSheet(f"background: rgba(55, 255, 95, 0.12); color: {C.GREEN}; border: 1px solid rgba(55, 255, 95, 0.3); border-radius: 21px;")
         else:
-            icon.setStyleSheet(f"background: rgba(255, 170, 48, 0.12); color: {C.WHITE}; border: 1px solid rgba(255, 170, 48, 0.38); border-radius: 21px;")
+            icon.setStyleSheet(f"background: rgba(255, 179, 0, 0.12); color: {C.WHITE}; border: 1px solid rgba(255, 179, 0, 0.38); border-radius: 21px;")
         r.addWidget(icon)
         meta = QVBoxLayout()
         title = QLabel(name)
@@ -8668,16 +9064,16 @@ class SystemConnectivityPage(QWidget):
             edit = QPushButton("Add API Key")
             edit.setStyleSheet("""
                 QPushButton {
-                    background: rgba(255, 170, 48, 0.1);
-                    color: #ffaa30;
-                    border: 1px solid rgba(255, 170, 48, 0.3);
+                    background: rgba(255, 179, 0, 0.1);
+                    color: #ffb300;
+                    border: 1px solid rgba(255, 179, 0, 0.3);
                     border-radius: 12px;
                     padding: 10px 12px;
                     font-weight: bold;
                 }
                 QPushButton:hover {
-                    background: rgba(255, 170, 48, 0.2);
-                    border: 1px solid rgba(255, 170, 48, 0.5);
+                    background: rgba(255, 179, 0, 0.2);
+                    border: 1px solid rgba(255, 179, 0, 0.5);
                 }
             """)
         edit.clicked.connect(lambda: self._open_api_keys())
@@ -8792,6 +9188,31 @@ class SystemConnectivityPage(QWidget):
         shl.addLayout(btn_row)
         lay.addWidget(shortcuts)
 
+        # App Theme
+        theme_card = self._card("App Theme", "Select the primary color theme for Brahma Echo.")
+        tl = theme_card.layout()
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Primary Color:"))
+        
+        self._pick_theme_btn = QPushButton("Pick Color Palette")
+        self._pick_theme_btn.clicked.connect(self._pick_theme_color)
+        
+        current_theme = "Gold"
+        try:
+            if APP_SETTINGS_FILE.exists():
+                with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    _d = json.load(f)
+                    current_theme = _d.get("app_theme", "Gold")
+        except:
+            pass
+            
+        if current_theme.startswith("#"):
+            self._pick_theme_btn.setStyleSheet(f"background: {current_theme}; color: #ffffff;")
+        
+        theme_row.addWidget(self._pick_theme_btn, 1)
+        tl.addLayout(theme_row)
+        lay.addWidget(theme_card)
+
         # Startup animation
         anim = self._card("Startup Animation", "Control how the boot sequence behaves.")
         al = anim.layout()
@@ -8812,7 +9233,7 @@ class SystemConnectivityPage(QWidget):
         self._preview_progress.setValue(0)
         self._preview_progress.setTextVisible(False)
         self._preview_progress.setFixedHeight(8)
-        self._preview_progress.setStyleSheet("QProgressBar { background: rgba(255,255,255,0.05); border: none; border-radius: 4px; } QProgressBar::chunk { background: #ffaa30; border-radius: 4px; }")
+        self._preview_progress.setStyleSheet("QProgressBar { background: rgba(255,255,255,0.05); border: none; border-radius: 4px; } QProgressBar::chunk { background: #ffb300; border-radius: 4px; }")
         al.addWidget(self._preview_progress)
         lay.addWidget(anim)
 
@@ -8877,6 +9298,34 @@ class SystemConnectivityPage(QWidget):
         lay.addStretch(1)
         return col
 
+    def _pick_theme_color(self):
+        color = QColorDialog.getColor(QColor(C.PRI), self, "Select App Theme Color")
+        if color.isValid():
+            self._change_theme(color.name())
+
+    def _change_theme(self, new_theme: str):
+        settings = {}
+        try:
+            if APP_SETTINGS_FILE.exists():
+                with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+        except Exception:
+            pass
+        old_theme = settings.get("app_theme", "Gold")
+        if new_theme.lower() == old_theme.lower():
+            return
+        settings["app_theme"] = new_theme
+        try:
+            with open(APP_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            print(f"Error saving theme: {e}")
+        import subprocess
+        import sys
+        QMessageBox.information(self, "Restart Required", "The application will now restart to apply the new theme.")
+        subprocess.Popen([sys.executable, "main.py"])
+        QApplication.quit()
+
     def _build_summary_card(self):
         card = self._card("")
         card.layout().setContentsMargins(18, 18, 18, 18)
@@ -8889,7 +9338,7 @@ class SystemConnectivityPage(QWidget):
     def _build_status_box(self):
         box = self._card("System Status", "")
         lay = box.layout()
-        self._sys_online = QLabel("🟢 System Online")
+        self._sys_online = QLabel("≡ƒƒó System Online")
         self._sys_online.setStyleSheet("color: #35ff75; font-weight: 700;")
         self._sys_note = QLabel("All systems are operational.")
         self._sys_note.setStyleSheet(f"color: {C.TEXT_MED};")
@@ -9377,7 +9826,7 @@ class SmartDevicesSection(QFrame):
         )
         header.addWidget(self._count_chip)
 
-        self._refresh_btn = QPushButton("↻")
+        self._refresh_btn = QPushButton("Γå╗")
         self._refresh_btn.setFixedSize(32, 32)
         self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._refresh_btn.setStyleSheet(f"""
@@ -9388,7 +9837,7 @@ class SmartDevicesSection(QFrame):
                 border-radius: 9px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48,0.08);
+                background: rgba(255, 179, 0,0.08);
                 border: 1px solid {C.PRI};
             }}
         """)
@@ -9399,7 +9848,7 @@ class SmartDevicesSection(QFrame):
         self._open_home_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._open_home_btn.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(255, 170, 48,0.10);
+                background: rgba(255, 179, 0,0.10);
                 color: {C.WHITE};
                 border: 1px solid {C.PRI};
                 border-radius: 9px;
@@ -9407,7 +9856,7 @@ class SmartDevicesSection(QFrame):
                 min-height: 32px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48,0.16);
+                background: rgba(255, 179, 0,0.16);
             }}
         """)
         self._open_home_btn.clicked.connect(self._open_brahma_home)
@@ -9433,14 +9882,14 @@ class SmartDevicesSection(QFrame):
         empty_btn.setFixedWidth(160)
         empty_btn.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(255, 170, 48,0.12);
+                background: rgba(255, 179, 0,0.12);
                 color: {C.WHITE};
                 border: 1px solid {C.PRI};
                 border-radius: 10px;
                 min-height: 34px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48,0.18);
+                background: rgba(255, 179, 0,0.18);
             }}
         """)
         empty_btn.clicked.connect(self._open_brahma_home)
@@ -9497,7 +9946,7 @@ class SmartDevicesSection(QFrame):
                 padding: 0 10px;
             }}
             QPushButton:hover {{
-                background: rgba(255, 170, 48,0.08);
+                background: rgba(255, 179, 0,0.08);
                 border: 1px solid {C.PRI};
             }}
         """)
@@ -9799,7 +10248,7 @@ class SmartDevicesSection(QFrame):
             return
 
     def _pick_color(self, device: dict[str, object]):
-        color = QColorDialog.getColor(QColor("#ffaa30"), self, "Pick Light Color")
+        color = QColorDialog.getColor(QColor(C.PRI), self, "Pick Light Color")
         if color.isValid():
             self._apply_tile_action(str(device.get("id", "")), "color", {"color": color.name()})
 
@@ -9898,7 +10347,11 @@ class BrahmaUI:
         self._tray.show()
         self._win._log_sig.connect(self._workspace_sidebar.append_log)
         self._win._task_workspace_sig.connect(self._workspace_sidebar.apply_task_workspace)
-        self._win._task_workspace_sig.connect(self._win._inline_workspace.apply_task_workspace)
+        # Some window layouts intentionally omit the inline chat workspace.  It is
+        # optional, so do not let its absence prevent the application from starting.
+        inline_workspace = getattr(self._win, "_inline_workspace", None)
+        if inline_workspace is not None:
+            self._win._task_workspace_sig.connect(inline_workspace.apply_task_workspace)
         self._on_discord_config_changed(self._win._load_discord_settings())
         launcher_pos = self._load_app_settings().get("launcher_pos")
         if isinstance(launcher_pos, (list, tuple)) and len(launcher_pos) == 2:
@@ -9963,7 +10416,7 @@ class BrahmaUI:
             try:
                 data = json.loads(APP_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    settings.update(data)
             except Exception:
                 pass
         self._app_settings_cache = dict(settings)
@@ -10001,7 +10454,7 @@ class BrahmaUI:
                 if enabled:
                     workspace_text = workspace or "No folder selected"
                     self._win._developer_status_lbl.setText(
-                        f"Developer mode is on • {workspace_text}"
+                        f"Developer mode is on ΓÇó {workspace_text}"
                     )
                     self._win._developer_card.show()
                     self._win._developer_card.raise_()
@@ -10030,7 +10483,7 @@ class BrahmaUI:
             try:
                 data = json.loads(DISCORD_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    settings.update(data)
             except Exception:
                 pass
         if (settings.get("bot_token") or "").strip():
@@ -10571,8 +11024,8 @@ class _ConnectDeviceCard(QFrame):
                 padding: 0 10px;
             }
             QPushButton:hover {
-                background: rgba(255,170,48,0.12);
-                color: #ffaa30;
+                background: rgba(255,179,0,0.12);
+                color: #ffb300;
             }
         """)
 
@@ -10587,7 +11040,7 @@ class _ConnectDeviceCard(QFrame):
 
         platform = str(device.get("platform", "UNKNOWN")).upper()
         status = "ONLINE" if bool(device.get("online")) else "OFFLINE"
-        self._status_label = QLabel(f"{platform} • {status}")
+        self._status_label = QLabel(f"{platform} ΓÇó {status}")
         self._status_label.setFont(QFont("Segoe UI", 8))
         self._status_label.setStyleSheet("color: rgba(255,255,255,0.55);")
         layout.addWidget(self._status_label)
@@ -10599,7 +11052,7 @@ class _ConnectDeviceCard(QFrame):
             info.append(str(device.get("device_type")))
         if device.get("ip"):
             info.append(str(device.get("ip")))
-        self._info_lbl = QLabel(" · ".join(info) if info else "Connected device")
+        self._info_lbl = QLabel(" ┬╖ ".join(info) if info else "Connected device")
         self._info_lbl.setFont(QFont("Segoe UI", 8))
         self._info_lbl.setStyleSheet("color: rgba(255,255,255,0.45);")
         self._info_lbl.setWordWrap(True)
@@ -10617,12 +11070,15 @@ class _ConnectDeviceCard(QFrame):
         self._rename_btn = QPushButton("Rename")
         self._disconnect_btn = QPushButton("Disconnect")
         self._forget_btn = QPushButton("Remove")
+        self._pin_btn = QPushButton("Set PIN")
 
+        actions_layout.addWidget(self._pin_btn)
         actions_layout.addWidget(self._rename_btn)
         actions_layout.addWidget(self._disconnect_btn)
         actions_layout.addWidget(self._forget_btn)
         layout.addWidget(self._action_container)
 
+        self._pin_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device.get("device_id", "")), "set_pin", {}))
         self._rename_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device.get("device_id", "")), "rename", {}))
         self._disconnect_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device.get("device_id", "")), "disconnect", {}))
         self._forget_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device.get("device_id", "")), "forget", {}))
@@ -10634,7 +11090,7 @@ class _ConnectDeviceCard(QFrame):
             self.setStyleSheet("""
                 QFrame#ConnectDeviceCard {
                     background: rgba(255,255,255,0.06);
-                    border: 1px solid rgba(255,170,48,0.25);
+                    border: 1px solid rgba(255,179,0,0.25);
                     border-radius: 18px;
                 }
                 QLabel {
@@ -10649,8 +11105,8 @@ class _ConnectDeviceCard(QFrame):
                     padding: 0 10px;
                 }
                 QPushButton:hover {
-                    background: rgba(255,170,48,0.16);
-                    color: #ffaa30;
+                    background: rgba(255,179,0,0.16);
+                    color: #ffb300;
                 }
             """)
         else:
@@ -10672,8 +11128,8 @@ class _ConnectDeviceCard(QFrame):
                     padding: 0 10px;
                 }
                 QPushButton:hover {
-                    background: rgba(255,170,48,0.12);
-                    color: #ffaa30;
+                    background: rgba(255,179,0,0.12);
+                    color: #ffb300;
                 }
             """)
 
@@ -10727,7 +11183,7 @@ class BrahmaConnectDevicesPage(QFrame):
         status_wrap.setSpacing(4)
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
-        self._gateway_pill = QLabel("● Gateway Online")
+        self._gateway_pill = QLabel("ΓùÅ Gateway Online")
         self._gateway_pill.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self._gateway_pill.setStyleSheet("color: #35ff75; background: rgba(53,255,117,0.06); border: 1px solid rgba(53,255,117,0.16); border-radius: 12px; padding: 5px 10px;")
         top_row.addWidget(self._gateway_pill)
@@ -10738,21 +11194,21 @@ class BrahmaConnectDevicesPage(QFrame):
         self._add_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self._add_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 170, 48, 0.10);
+                background: rgba(255, 179, 0, 0.10);
                 color: #ffffff;
-                border: 1px solid rgba(255, 170, 48, 0.25);
+                border: 1px solid rgba(255, 179, 0, 0.25);
                 border-radius: 12px;
                 padding: 0 14px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48, 0.16);
-                border: 1px solid rgba(255, 170, 48, 0.40);
+                background: rgba(255, 179, 0, 0.16);
+                border: 1px solid rgba(255, 179, 0, 0.40);
             }
         """)
         self._add_btn.clicked.connect(self._trigger_add_device)
         top_row.addWidget(self._add_btn)
         status_wrap.addLayout(top_row)
-        self._gateway_meta = QLabel("Port: 8765  ·  Devices: 0")
+        self._gateway_meta = QLabel("Port: 8765  ┬╖  Devices: 0")
         self._gateway_meta.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._gateway_meta.setFont(QFont("Segoe UI", 8))
         self._gateway_meta.setStyleSheet("color: rgba(255,255,255,0.42);")
@@ -10763,9 +11219,9 @@ class BrahmaConnectDevicesPage(QFrame):
         self._main_stack = QStackedWidget()
         self._main_stack.setStyleSheet("background: transparent;")
         
-        # ───────────────────────────────────────────────
-        # PAGE 0 — OVERVIEW (GRID / EMPTY)
-        # ───────────────────────────────────────────────
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        # PAGE 0 ΓÇö OVERVIEW (GRID / EMPTY)
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
         self._overview_page = QWidget()
         ov_lay = QVBoxLayout(self._overview_page)
         ov_lay.setContentsMargins(0, 10, 0, 0)
@@ -10810,14 +11266,14 @@ class BrahmaConnectDevicesPage(QFrame):
         empty_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         empty_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(255, 170, 48, 0.10);
-                color: #ffaa30;
-                border: 1px solid rgba(255, 170, 48, 0.25);
+                background: rgba(255, 179, 0, 0.10);
+                color: #ffb300;
+                border: 1px solid rgba(255, 179, 0, 0.25);
                 border-radius: 20px;
             }
             QPushButton:hover {
-                background: rgba(255, 170, 48, 0.20);
-                border: 1px solid rgba(255, 170, 48, 0.50);
+                background: rgba(255, 179, 0, 0.20);
+                border: 1px solid rgba(255, 179, 0, 0.50);
             }
         """)
         empty_btn.clicked.connect(self._trigger_add_device)
@@ -10828,21 +11284,21 @@ class BrahmaConnectDevicesPage(QFrame):
         ov_lay.addWidget(self._overview_stack)
         self._main_stack.addWidget(self._overview_page)
         
-        # ───────────────────────────────────────────────
-        # PAGE 1 — DETAIL VIEW
-        # ───────────────────────────────────────────────
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        # PAGE 1 ΓÇö DETAIL VIEW
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
         self._detail_page = QWidget()
         det_lay = QVBoxLayout(self._detail_page)
         det_lay.setContentsMargins(0, 10, 0, 0)
         det_lay.setSpacing(16)
         
-        back_btn = QPushButton("← Back to Devices")
+        back_btn = QPushButton("ΓåÉ Back to Devices")
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.setFixedSize(140, 32)
         back_btn.setFont(QFont("Segoe UI", 9))
         back_btn.setStyleSheet("""
             QPushButton { background: transparent; color: rgba(255,255,255,0.7); border: none; text-align: left; }
-            QPushButton:hover { color: #ffaa30; }
+            QPushButton:hover { color: #ffb300; }
         """)
         back_btn.clicked.connect(self._close_detail)
         det_lay.addWidget(back_btn)
@@ -10852,7 +11308,7 @@ class BrahmaConnectDevicesPage(QFrame):
         self._detail_icon.setFixedSize(48, 48)
         self._detail_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._detail_icon.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-        self._detail_icon.setStyleSheet("background: rgba(255, 170, 48, 0.10); color: #ffaa30; border: 1px solid rgba(255,170,48,0.22); border-radius: 12px;")
+        self._detail_icon.setStyleSheet("background: rgba(255, 179, 0, 0.10); color: #ffb300; border: 1px solid rgba(255,179,0,0.22); border-radius: 12px;")
         self._detail_header.addWidget(self._detail_icon)
         
         det_titles = QVBoxLayout()
@@ -10919,7 +11375,7 @@ class BrahmaConnectDevicesPage(QFrame):
             if b != self._btn_forget:
                 b.setStyleSheet("""
                     QPushButton { background: rgba(255,255,255,0.03); color: #ffffff; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; }
-                    QPushButton:hover { background: rgba(255,170,48,0.08); border: 1px solid rgba(255,170,48,0.22); color: #ffaa30; }
+                    QPushButton:hover { background: rgba(255,179,0,0.08); border: 1px solid rgba(255,179,0,0.22); color: #ffb300; }
                 """)
             else:
                 b.setStyleSheet("""
@@ -10936,20 +11392,20 @@ class BrahmaConnectDevicesPage(QFrame):
         
         self._main_stack.addWidget(self._detail_page)
         
-        # ───────────────────────────────────────────────
-        # PAGE 2 — ADD DEVICE (QR WIZARD)
-        # ───────────────────────────────────────────────
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        # PAGE 2 ΓÇö ADD DEVICE (QR WIZARD)
+        # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
         self._add_device_page = QWidget()
         add_lay = QVBoxLayout(self._add_device_page)
         add_lay.setContentsMargins(0, 10, 0, 0)
         
-        add_back_btn = QPushButton("← Cancel")
+        add_back_btn = QPushButton("ΓåÉ Cancel")
         add_back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_back_btn.setFixedSize(140, 32)
         add_back_btn.setFont(QFont("Segoe UI", 9))
         add_back_btn.setStyleSheet("""
             QPushButton { background: transparent; color: rgba(255,255,255,0.7); border: none; text-align: left; }
-            QPushButton:hover { color: #ffaa30; }
+            QPushButton:hover { color: #ffb300; }
         """)
         add_back_btn.clicked.connect(self._close_detail)
         add_lay.addWidget(add_back_btn)
@@ -10976,7 +11432,7 @@ class BrahmaConnectDevicesPage(QFrame):
         self._cs_android_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self._cs_android_btn.setStyleSheet("""
             QPushButton { background: rgba(10, 12, 18, 220); color: rgba(255,255,255,0.9); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }
-            QPushButton:hover { color: #ffaa30; border: 1px solid rgba(255,170,48,0.6); background: rgba(255,170,48,0.1); }
+            QPushButton:hover { color: #ffb300; border: 1px solid rgba(255,179,0,0.6); background: rgba(255,179,0,0.1); }
         """)
         self._cs_android_btn.clicked.connect(self._cinema_select_android)
         w0_row.addWidget(self._cs_android_btn)
@@ -11017,7 +11473,7 @@ class BrahmaConnectDevicesPage(QFrame):
         self._onb_code_lbl = QLabel("------")
         self._onb_code_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._onb_code_lbl.setFont(QFont("Consolas", 18, QFont.Weight.Black))
-        self._onb_code_lbl.setStyleSheet("color: #ffaa30; letter-spacing: 6px;")
+        self._onb_code_lbl.setStyleSheet("color: #ffb300; letter-spacing: 6px;")
         w1_lay.addWidget(self._onb_code_lbl)
         
         self._onb_status_lbl = QLabel("WAITING FOR CONNECTION")
@@ -11210,10 +11666,10 @@ class BrahmaConnectDevicesPage(QFrame):
             
         devices = service.list_devices()
         port = getattr(service, "port", 8765)
-        self._gateway_meta.setText(f"Port: {port}  ·  Devices: {len(devices)}")
+        self._gateway_meta.setText(f"Port: {port}  ┬╖  Devices: {len(devices)}")
         
         # If we are in Add Device or Detail page, keep it there
-        if self._main_stack.currentIndex() not in (0,):
+        if self._main_stack.currentIndex() not in (0,) and not force:
             pass # Keep current index unless forced to reset
         elif len(devices) == 0:
             self._main_stack.setCurrentIndex(0)
@@ -11256,6 +11712,9 @@ class BrahmaConnectDevicesPage(QFrame):
             elif action == "forget":
                 self._forget_device(device_id)
                 return
+            elif action == "set_pin":
+                self._set_device_pin(device_id)
+                return
             else:
                 if hasattr(service, "route_command"):
                     service.route_command(device_id, action, payload)
@@ -11276,6 +11735,24 @@ class BrahmaConnectDevicesPage(QFrame):
                 except Exception:
                     pass
             self.refresh(force=True)
+
+    def _set_device_pin(self, device_id: str):
+        pin, ok = QInputDialog.getText(self, "Set Device PIN", "Enter device PIN:", QLineEdit.EchoMode.Password)
+        if ok and pin.strip():
+            try:
+                settings = {}
+                if APP_SETTINGS_FILE.exists():
+                    with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                
+                device_pins = settings.get("device_pins", {})
+                device_pins[device_id] = pin.strip()
+                settings["device_pins"] = device_pins
+                
+                with open(APP_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(settings, f, indent=4)
+            except Exception as e:
+                print(f"Error saving pin: {e}")
 
     def _forget_device(self, device_id: str):
         service = self._service_obj()
@@ -11359,7 +11836,11 @@ class BrahmaUI:
         self._tray.show()
         self._win._log_sig.connect(self._workspace_sidebar.append_log)
         self._win._task_workspace_sig.connect(self._workspace_sidebar.apply_task_workspace)
-        self._win._task_workspace_sig.connect(self._win._inline_workspace.apply_task_workspace)
+        # Some window layouts intentionally omit the inline chat workspace.  It is
+        # optional, so do not let its absence prevent the application from starting.
+        inline_workspace = getattr(self._win, "_inline_workspace", None)
+        if inline_workspace is not None:
+            self._win._task_workspace_sig.connect(inline_workspace.apply_task_workspace)
         self._on_discord_config_changed(self._win._load_discord_settings())
         launcher_pos = self._load_app_settings().get("launcher_pos")
         if isinstance(launcher_pos, (list, tuple)) and len(launcher_pos) == 2:
@@ -11424,7 +11905,8 @@ class BrahmaUI:
             try:
                 data = json.loads(APP_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    for k, v in data.items():
+                        settings[k] = v
             except Exception:
                 pass
         self._app_settings_cache = dict(settings)
@@ -11462,7 +11944,7 @@ class BrahmaUI:
                 if enabled:
                     workspace_text = workspace or "No folder selected"
                     self._win._developer_status_lbl.setText(
-                        f"Developer mode is on • {workspace_text}"
+                        f"Developer mode is on ΓÇó {workspace_text}"
                     )
                     self._win._developer_card.show()
                     self._win._developer_card.raise_()
@@ -11491,7 +11973,7 @@ class BrahmaUI:
             try:
                 data = json.loads(DISCORD_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    settings.update({k: data.get(k, v) for k, v in settings.items()})
+                    settings.update(data)
             except Exception:
                 pass
         if (settings.get("bot_token") or "").strip():

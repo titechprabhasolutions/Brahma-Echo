@@ -56,7 +56,7 @@ from PyQt6.QtCore import QTimer
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
-from actions.attention_monitor import AttentionMonitor, speak_native, stop_native_speech, handle_call_action, read_event_preview
+from actions.attention_monitor import AttentionMonitor, speak_native, stop_native_speech, handle_call_action, read_event_preview, set_speech_sink
 # from actions.daily_briefing import compile_daily_briefing
 from or_client import client as openrouter_client
 from workspace_store import store as workspace_store
@@ -195,8 +195,16 @@ def _load_system_prompt() -> str:
 
 
 def _speak_daily_briefing(ui=None) -> None:
-    """Daily briefing feature disabled."""
-    pass
+    try:
+        from actions.daily_briefing import compile_daily_briefing
+        from actions.attention_monitor import speak_native
+        text = compile_daily_briefing()
+        if ui:
+            ui.show_daily_briefing(text)
+            ui.write_log(f"Brahma Echo: {text}")
+        speak_native(text)
+    except Exception as e:
+        print(f"[DailyBriefing] Error: {e}")
     
 def _extract_gemini_text(response) -> str:
     text_parts: list[str] = []
@@ -611,7 +619,7 @@ TOOL_DECLARATIONS = [
             "Routes a Brahma Connect command to a paired device through the gateway. "
             "Use for actions such as launch_app, open_url, get_battery, capture_screen, take_photo, "
             "clipboard_get, clipboard_set, send_file, receive_file, media_play, media_pause, volume_set, "
-            "notification_list, get_device_info, close_app, mouse_move, and keyboard_type. "
+            "notification_list, get_device_info, close_app, mouse_move, keyboard_type, unlock_phone, file_list, file_read, file_write, file_delete."
             "Do not execute device operations directly anywhere else."
         ),
         "parameters": {
@@ -626,6 +634,17 @@ TOOL_DECLARATIONS = [
                 "parameters": {"type": "OBJECT", "description": "Action parameters"},
             },
             "required": ["device", "action"]
+        }
+    },
+    {
+        "name": "unlock_device",
+        "description": "Unlocks a paired Android device using its saved PIN.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "target": {"type": "STRING", "description": "Device name or ID to unlock"}
+            },
+            "required": ["target"]
         }
     },
     {
@@ -691,13 +710,14 @@ TOOL_DECLARATIONS = [
         "name": "file_controller",
         "description": (
             "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, "
-            "and organizing a desktop or any folder into subfolders by type/date."
+            "and organizing a desktop or any folder into subfolders by type/date. Can also be used to explore and manage files on a connected Android phone."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | organize_folder | info"},
-                "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home"},
+                "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home. For android, use paths like downloads, documents, photos, movies, root."},
+                "target":      {"type": "STRING", "description": "If operating on an Android device, provide the device name or ID. Leave empty for PC local files."},
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
@@ -1084,6 +1104,90 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "spotify_controller",
+        "description": (
+            "Plays and controls music via Spotify and Google Chrome. "
+            "ALWAYS use this tool whenever the user asks to play any song, music, track, or artist "
+            "(e.g. 'play Starboy', 'play music on Spotify'), or control playback "
+            "('pause the music', 'resume', 'skip song', 'next track', 'volume up', 'volume down', 'mute'). "
+            "Do NOT use open_app for playing songs."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "search_play | play | pause | toggle | next | previous | volume_up | volume_down | mute | open_spotify (default: search_play)"
+                },
+                "query": {
+                    "type": "STRING",
+                    "description": "Song title, artist name, album, or playlist to search and play"
+                },
+                "volume": {
+                    "type": "NUMBER",
+                    "description": "Volume level (optional)"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "calendar_scheduler",
+        "description": (
+            "Manages calendar events, appointments, and schedules. "
+            "Use whenever the user asks to schedule a meeting, check upcoming events, "
+            "view schedule for today/tomorrow, or remove an event."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "add_event | list_events | check_day | delete_event | get_upcoming | export_ics"
+                },
+                "title": {
+                    "type": "STRING",
+                    "description": "Title or summary of the meeting/event"
+                },
+                "date": {
+                    "type": "STRING",
+                    "description": "Date (YYYY-MM-DD or 'today', 'tomorrow')"
+                },
+                "time": {
+                    "type": "STRING",
+                    "description": "Time (HH:MM in 24h format, e.g. '14:30')"
+                },
+                "duration_minutes": {
+                    "type": "NUMBER",
+                    "description": "Duration in minutes (default: 30)"
+                },
+                "location": {
+                    "type": "STRING",
+                    "description": "Location or meeting link (optional)"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "daily_briefing",
+        "description": (
+            "Delivers a complete daily briefing including time, date, today's schedule/calendar events, "
+            "and top world & tech headlines. Use whenever the user asks for their daily briefing, morning update, "
+            "or what's happening today."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "category": {
+                    "type": "STRING",
+                    "description": "Optional news category: all (default), tech, world"
+                }
+            },
+            "required": []
+        }
+    },
 ]
 
 
@@ -1104,6 +1208,10 @@ class BrahmaLive:
         self._reply_mode = False
         self._attention_lock = threading.Lock()
         self._attention_monitor = AttentionMonitor(on_event=self._on_external_notification)
+        try:
+            set_speech_sink(self.speak)
+        except Exception:
+            pass
         self._meeting_lock = threading.Lock()
         self._meeting_active = False
         self._meeting_event: dict | None = None
@@ -1150,8 +1258,11 @@ class BrahmaLive:
             try:
                 if self._should_announce_idle():
                     message = random.choice(self._idle_prompts)
-                    self.ui.write_log(f"SYS: {message}")
-                    threading.Thread(target=speak_native, args=(message,), daemon=True).start()
+                    self.ui.write_log(f"Brahma Echo: {message}")
+                    if self.session and self._loop:
+                        self.speak(message)
+                    else:
+                        threading.Thread(target=speak_native, args=(message,), daemon=True).start()
                     self._reset_idle_activity()
             except Exception:
                 pass
@@ -1195,6 +1306,70 @@ class BrahmaLive:
             # Still in reply mode but no pending reply event means reset and continue
             self._reply_mode = False
 
+        if getattr(self, "_email_mode", False):
+            if self._handle_email_flow(text):
+                return
+
+        # Check for email command initiation
+        lower = text.lower()
+        if lower.startswith("email ") or lower.startswith("mail ") or "send email" in lower or "write email" in lower or "compose email" in lower:
+            # Extract recipient
+            rem = text
+            for prefix in ("send email", "send an email", "write email", "write an email", "compose email", "compose an email", "email", "mail"):
+                if rem.lower().strip().startswith(prefix):
+                    rem = rem.strip()[len(prefix):].strip()
+                    break
+            
+            # Remove leading "to " if present
+            if rem.lower().startswith("to "):
+                rem = rem[3:].strip()
+                
+            recipient = rem.strip()
+            self._email_mode = True
+            self._email_recipient = recipient
+            
+            try:
+                self.ui.begin_task_workspace(
+                    text,
+                    [
+                        "Identify the recipient",
+                        "Select email application",
+                        "Collect message content",
+                        "Open application & compose",
+                    ],
+                    source=source or "local",
+                )
+            except Exception:
+                pass
+                
+            if not recipient:
+                self._email_step = 0
+                prompt = "Who would you like to send the email to?"
+                self.ui.write_log(f"Brahma Echo: {prompt}")
+                self.speak(prompt)
+                try:
+                    self.ui.update_task_workspace(
+                        status="Identifying recipient",
+                        output="Asking for email recipient...",
+                        percent=10,
+                    )
+                except Exception:
+                    pass
+            else:
+                self._email_step = 1
+                prompt = "Which email app would you like to use? (Gmail, default mail app, etc.)"
+                self.ui.write_log(f"Brahma Echo: {prompt}")
+                self.speak(prompt)
+                try:
+                    self.ui.update_task_workspace(
+                        status="Selecting email app",
+                        output=f"Recipient identified: {recipient}. Asking for email application...",
+                        percent=25,
+                    )
+                except Exception:
+                    pass
+            return
+
         try:
             from smart_home.smart_device_manager import SmartDeviceManager
             sd_mgr = SmartDeviceManager()
@@ -1218,6 +1393,7 @@ class BrahmaLive:
 
         if website_request and developer_enabled and developer_workspace:
             try:
+                self.speak("Working on your website...")
                 if hasattr(self.ui, "_developer_status_lbl"):
                     self.ui._developer_status_lbl.setText("Building website with Gemini in the selected workspace")
                     self.ui._developer_card.show()
@@ -1434,7 +1610,7 @@ class BrahmaLive:
             if not target:
                 return False
 
-            action = "get_device_info"
+            action = None
             params: dict[str, object] = {}
             if "flashlight" in normalized and ("turn on" in normalized or "switch on" in normalized or "power on" in normalized or "on" == normalized):
                 action = "flashlight_on"
@@ -1456,6 +1632,11 @@ class BrahmaLive:
                     params["value"] = int(match.group(1))
             elif "volume" in normalized:
                 action = "volume_get"
+            elif "info" in normalized or "status" in normalized:
+                action = "get_device_info"
+                
+            if not action:
+                return False
 
             if action == "launch_app":
                 app_name = str(params.get("app_name") or "").strip()
@@ -1564,8 +1745,11 @@ class BrahmaLive:
 
     def _announce_attention(self, event: dict):
         msg = self._attention_message(event)
-        self.ui.write_log(f"SYS: {msg}")
-        threading.Thread(target=speak_native, args=(msg,), daemon=True).start()
+        self.ui.write_log(f"Brahma Echo: {msg}")
+        if self.session and self._loop:
+            self.speak(msg)
+        else:
+            threading.Thread(target=speak_native, args=(msg,), daemon=True).start()
         self.ui.show_attention_alert(event)
 
     def _on_external_notification(self, event: dict):
@@ -1655,8 +1839,11 @@ class BrahmaLive:
             self._reply_mode = True
 
         message = "What would you like to say in reply?"
-        self.ui.write_log(f"SYS: {message}")
-        threading.Thread(target=speak_native, args=(message,), daemon=True).start()
+        self.ui.write_log(f"Brahma Echo: {message}")
+        if self.session and self._loop:
+            self.speak(message)
+        else:
+            threading.Thread(target=speak_native, args=(message,), daemon=True).start()
         try:
             self.ui.begin_task_workspace(
                 "Replying to message",
@@ -1765,6 +1952,124 @@ class BrahmaLive:
         finally:
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
+
+    def _handle_email_flow(self, text: str) -> bool:
+        lower = text.lower()
+        if any(cancel in lower for cancel in ("cancel", "never mind", "skip", "stop", "abort")):
+            self._email_mode = False
+            self._email_step = 0
+            self._email_profiles = {}
+            msg = "Email sending cancelled, sir."
+            self.ui.write_log(f"Brahma Echo: {msg}")
+            self.speak(msg)
+            try:
+                self.ui.finish_task_workspace("Email sending cancelled.", "Cancelled", 100)
+            except Exception:
+                pass
+            return True
+
+        if self._email_step == 0:
+            # We just collected the recipient
+            self._email_recipient = text.strip()
+            self._email_step = 1
+            prompt = "Which email app would you like to use? (Gmail, default mail app, etc.)"
+            self.ui.write_log(f"Brahma Echo: {prompt}")
+            self.speak(prompt)
+            try:
+                self.ui.update_task_workspace(
+                    status="Selecting email app",
+                    output=f"Recipient: {self._email_recipient}. Asking for email application...",
+                    percent=40,
+                )
+            except Exception:
+                pass
+            return True
+
+        elif self._email_step == 1:
+            # We just collected the app name
+            self._email_app = text.strip()
+            self._email_step = 2
+            
+            prompt = "What is the message you'd like to send?"
+            self.ui.write_log(f"Brahma Echo: {prompt}")
+            self.speak(prompt)
+            try:
+                self.ui.update_task_workspace(
+                    status="Collecting message",
+                    output=f"Recipient: {self._email_recipient} | App: {self._email_app}. Asking for message content...",
+                    percent=70,
+                )
+            except Exception:
+                pass
+            return True
+
+        elif self._email_step == 2:
+            # We just collected the message
+            self._email_message = text.strip()
+            self._email_mode = False
+            self._email_step = 0
+            
+            # Now let's execute composing!
+            msg = f"Opening {self._email_app} and composing email to {self._email_recipient}..."
+            self.ui.write_log(f"Brahma Echo: {msg}")
+            self.speak(msg)
+            try:
+                self.ui.update_task_workspace(
+                    status="Composing email",
+                    output=f"Composing message to {self._email_recipient} via {self._email_app}...",
+                    percent=90,
+                )
+            except Exception:
+                pass
+            
+            try:
+                import urllib.parse
+                import webbrowser
+                subject = "Message from Brahma Echo"
+                quoted_recipient = urllib.parse.quote(self._email_recipient)
+                quoted_subject = urllib.parse.quote(subject)
+                quoted_body = urllib.parse.quote(self._email_message)
+                
+                import os
+                import subprocess
+                import shutil
+
+                app_lower = self._email_app.lower()
+                chrome_opened = False
+
+                if "gmail" in app_lower or "chrome" in app_lower:
+                    import urllib.parse
+                    quoted_recipient = urllib.parse.quote(self._email_recipient)
+                    quoted_subject = urllib.parse.quote("Message from Brahma Echo")
+                    quoted_body = urllib.parse.quote(self._email_message)
+                    url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quoted_recipient}&su={quoted_subject}&body={quoted_body}"
+                    
+                    # Use webbrowser to naturally open a new tab in the already running Chrome window
+                    import webbrowser
+                    webbrowser.open(url)
+
+                elif "outlook" in app_lower:
+                    url = f"https://outlook.live.com/default/?path=/mail/action/compose&to={quoted_recipient}&subject={quoted_subject}&body={quoted_body}"
+                    webbrowser.open(url)
+                else:
+                    url = f"mailto:{quoted_recipient}?subject={quoted_subject}&body={quoted_body}"
+                    webbrowser.open(url)
+                
+                try:
+                    self.ui.finish_task_workspace("Email composed successfully.", "Composed", 100)
+                except Exception:
+                    pass
+            except Exception as e:
+                err_msg = f"Failed to compose email: {e}"
+                self.ui.write_log(f"ERR: {err_msg}")
+                self.speak(err_msg)
+                try:
+                    self.ui.finish_task_workspace(err_msg, "Failed", 100)
+                except Exception:
+                    pass
+            return True
+
+        return False
 
     def _handle_attention_response(self, text: str) -> bool:
         with self._attention_lock:
@@ -1922,15 +2227,17 @@ class BrahmaLive:
             self.ui.set_state("LISTENING")
 
     def speak(self, text: str):
-        if not self._loop or not self.session:
+        text = (text or "").strip()
+        if not text:
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
-                turn_complete=True
-            ),
-            self._loop
-        )
+        def _speak_thread():
+            try:
+                self.set_speaking(True)
+                from actions.attention_monitor import _speak_edge_native
+                _speak_edge_native(text)
+            finally:
+                self.set_speaking(False)
+        threading.Thread(target=_speak_thread, daemon=True).start()
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -1959,7 +2266,9 @@ class BrahmaLive:
         parts.append(
             "Wake-word mode: if the microphone is muted, still listen for the words 'Brahma Echo', 'hey', 'hi', and 'hello'. "
             "When you hear one of these activation cues, keep the session friendly and concise, "
-            "and wait for the user's next command."
+            "and wait for the user's next command. "
+            "IMPORTANT: Do NOT speak an unprompted generic greeting (like 'Thank you, how can I help you?') upon connecting. "
+            "Remain completely silent until the user speaks to you or asks a question."
         )
 
         return types.LiveConnectConfig(
@@ -1983,6 +2292,7 @@ class BrahmaLive:
         args = dict(fc.args or {})
 
         print(f"[BRAHMA ECHO] 🔧 {name}  {args}")
+        self.speak(f"Working on {name.replace('_', ' ')}...")
         self.ui.set_state("THINKING")
         try:
             self.ui.update_task_workspace(
@@ -2152,6 +2462,22 @@ class BrahmaLive:
             elif name == "connect_disconnect_device":
                 r = await loop.run_in_executor(None, lambda: connect_disconnect_device(parameters=args, player=self.ui))
                 result = r or "Done."
+            elif name in ("spotify_controller", "spotify", "music"):
+                from actions.spotify_controller import spotify_controller
+                r = await loop.run_in_executor(None, lambda: spotify_controller(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+            elif name in ("calendar_scheduler", "calendar", "schedule"):
+                from actions.calendar_scheduler import calendar_scheduler
+                r = await loop.run_in_executor(None, lambda: calendar_scheduler(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+            elif name in ("daily_briefing", "briefing"):
+                from actions.daily_briefing import daily_briefing
+                r = await loop.run_in_executor(None, lambda: daily_briefing(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Delivered daily briefing."
+            elif name == "unlock_device":
+                from actions.unlock_device import unlock_device
+                r = await loop.run_in_executor(None, lambda: unlock_device(parameters=args, player=self.ui))
+                result = r or "Done."
             elif name == "shutdown_brahma":
                 self.ui.write_log("SYS: Shutdown requested.")
                 self.speak("Goodbye, sir.")
@@ -2171,6 +2497,7 @@ class BrahmaLive:
             self.speak_error(name, e)
 
         try:
+            self.speak(f"{name.replace('_', ' ')} completed.")
             self.ui.finish_task_workspace(result, "Task completed.", 100)
         except Exception:
             pass

@@ -590,7 +590,7 @@
 
     // ——— SCENE & CAMERA ———
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x050505, 0.05);
+    scene.fog = new THREE.FogExp2(0x040302, 0.05);
 
     const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 500);
     camera.position.set(0, 0, 10.0);
@@ -608,9 +608,9 @@
 
     const bloom = new THREE.UnrealBloomPass(
       new THREE.Vector2(width, height),
-      2.6, // strength
-      0.65, // radius
-      0.15  // threshold
+      3.2, // strength
+      0.80, // radius
+      0.10  // threshold
     );
     composer.addPass(bloom);
 
@@ -657,19 +657,19 @@
     controls.enablePan = false;
 
     // ——— COLORS ———
-    const C_BRIGHT = 0xffaa30;
-    const C_MID    = 0xdd7700;
-    const C_DIM    = 0x884400;
-    const C_FAINT  = 0x442200;
-    const C_HOT    = 0xffcc66;
-    const C_CYAN   = 0x37ffea;
+    const C_BRIGHT = 0xffbe1a;
+    const C_MID    = 0xd4af37;
+    const C_DIM    = 0xaa8010;
+    const C_FAINT  = 0x553f05;
+    const C_HOT    = 0xffea80;
+    const C_CYAN   = 0xfff2a3;
 
     // ——— BACKGROUND ATMOSPHERE (STARS, FAINT GRID & DUST) ———
     const atmosphereGroup = new THREE.Group();
     scene.add(atmosphereGroup);
 
     // 1. Faint 3D Grid Floor & Ceiling
-    const gridHelper = new THREE.GridHelper(60, 40, 0xaa5500, 0x221100);
+    const gridHelper = new THREE.GridHelper(60, 40, 0xd4af37, 0x3b2e0c);
     gridHelper.position.y = -4.5;
     gridHelper.material.opacity = 0.08;
     gridHelper.material.transparent = true;
@@ -686,7 +686,7 @@
     }
     starGeo.setAttribute("position", new THREE.Float32BufferAttribute(starPos, 3));
     const starMat = new THREE.PointsMaterial({
-      color: 0xffddaa,
+      color: 0xffe680,
       size: 0.03,
       transparent: true,
       opacity: 0.35,
@@ -947,10 +947,10 @@
     dotC.width = dotC.height = 64;
     const dCtx = dotC.getContext("2d");
     const g = dCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, "rgba(255,170,48,1)");
-    g.addColorStop(0.2, "rgba(255,120,20,0.6)");
-    g.addColorStop(0.5, "rgba(200,80,0,0.15)");
-    g.addColorStop(1, "rgba(100,40,0,0)");
+    g.addColorStop(0, "rgba(255,215,0,1)");
+    g.addColorStop(0.25, "rgba(255,179,0,0.6)");
+    g.addColorStop(0.6, "rgba(170,128,16,0.25)");
+    g.addColorStop(1, "rgba(85,63,5,0)");
     dCtx.fillStyle = g;
     dCtx.fillRect(0, 0, 64, 64);
 

@@ -27,6 +27,11 @@ class DeviceCommandHandler(private val context: Context) {
             "open_url" -> openUrl(parameters)
             "volume_get" -> volumeGet()
             "volume_set" -> volumeSet(parameters)
+            "unlock_phone" -> unlockPhone(parameters)
+            "file_list" -> fileList(parameters)
+            "file_read" -> fileRead(parameters)
+            "file_write" -> fileWrite(parameters)
+            "file_delete" -> fileDelete(parameters)
             else -> CommandResult(false, errorCode = "UNKNOWN_COMMAND", error = "Unsupported command: $action")
         }
     }
@@ -189,5 +194,106 @@ class DeviceCommandHandler(private val context: Context) {
         val level = ((clamped / 100f) * max).toInt().coerceIn(0, max)
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0)
         return CommandResult(true, data = mapOf("stream" to "music", "percentage" to clamped, "current" to level, "max" to max))
+    }
+
+    private fun unlockPhone(parameters: Map<String, Any?>): CommandResult {
+        val pin = parameters["pin"]?.toString()
+        if (pin.isNullOrBlank()) {
+            return CommandResult(false, errorCode = "MISSING_PIN", error = "PIN is required to unlock phone.")
+        }
+        val service = com.brahma.connect.accessibility.BrahmaAccessibilityService.instance
+        if (service == null) {
+            return CommandResult(false, errorCode = "ACCESSIBILITY_DISABLED", error = "Brahma Accessibility Service is not enabled.")
+        }
+        val success = service.unlockPhone(pin)
+        return if (success) {
+            CommandResult(true, data = mapOf("message" to "Unlock sequence initiated."))
+        } else {
+            CommandResult(false, errorCode = "UNLOCK_FAILED", error = "Failed to initiate unlock sequence.")
+        }
+    }
+
+    private fun resolveFileTarget(path: String?): java.io.File {
+        val storage = android.os.Environment.getExternalStorageDirectory()
+        if (path.isNullOrBlank() || path.equals("home", ignoreCase = true)) {
+            return storage
+        }
+        val lower = path.lowercase().trim()
+        val baseDir = when (lower) {
+            "downloads" -> android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            "documents" -> android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS)
+            "pictures" -> android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
+            "music" -> android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC)
+            "movies", "videos" -> android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES)
+            else -> java.io.File(storage, path)
+        }
+        return baseDir
+    }
+
+    private fun fileList(parameters: Map<String, Any?>): CommandResult {
+        val path = parameters["path"]?.toString()
+        val dir = resolveFileTarget(path)
+        if (!dir.exists() || !dir.isDirectory) {
+            return CommandResult(false, errorCode = "NOT_FOUND", error = "Directory not found: ${dir.absolutePath}")
+        }
+        val items = dir.listFiles()?.map { file ->
+            mapOf(
+                "name" to file.name,
+                "is_dir" to file.isDirectory,
+                "size" to file.length(),
+                "path" to file.absolutePath
+            )
+        } ?: emptyList()
+        return CommandResult(true, data = mapOf("items" to items, "path" to dir.absolutePath))
+    }
+
+    private fun fileRead(parameters: Map<String, Any?>): CommandResult {
+        val path = parameters["path"]?.toString()
+        val file = resolveFileTarget(path)
+        if (!file.exists() || !file.isFile) {
+            return CommandResult(false, errorCode = "NOT_FOUND", error = "File not found: ${file.absolutePath}")
+        }
+        return try {
+            val content = file.readText()
+            CommandResult(true, data = mapOf("content" to content, "path" to file.absolutePath))
+        } catch (e: Exception) {
+            CommandResult(false, errorCode = "READ_ERROR", error = e.message ?: "Failed to read file.")
+        }
+    }
+
+    private fun fileWrite(parameters: Map<String, Any?>): CommandResult {
+        val path = parameters["path"]?.toString()
+        val content = parameters["content"]?.toString() ?: ""
+        val append = parameters["append"] as? Boolean ?: false
+        val file = resolveFileTarget(path)
+        return try {
+            file.parentFile?.mkdirs()
+            if (append) {
+                file.appendText(content)
+            } else {
+                file.writeText(content)
+            }
+            CommandResult(true, data = mapOf("message" to "File written successfully.", "path" to file.absolutePath))
+        } catch (e: Exception) {
+            CommandResult(false, errorCode = "WRITE_ERROR", error = e.message ?: "Failed to write file.")
+        }
+    }
+
+    private fun fileDelete(parameters: Map<String, Any?>): CommandResult {
+        val path = parameters["path"]?.toString()
+        val file = resolveFileTarget(path)
+        if (!file.exists()) {
+            return CommandResult(false, errorCode = "NOT_FOUND", error = "File or directory not found: ${file.absolutePath}")
+        }
+        return try {
+            val success = if (file.isDirectory) file.deleteRecursively() else file.delete()
+            if (success) {
+                CommandResult(true, data = mapOf("message" to "Deleted successfully.", "path" to file.absolutePath))
+            } else {
+                CommandResult(false, errorCode = "DELETE_FAILED", error = "Failed to delete.")
+            }
+        } catch (e: Exception) {
+            CommandResult(false, errorCode = "DELETE_ERROR", error = e.message ?: "Failed to delete file.")
+        }
     }
 }

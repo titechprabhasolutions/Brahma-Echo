@@ -1,6 +1,7 @@
 # actions/open_app.py
 # Brahma AI - Cross-Platform App Launcher
 
+import os
 import time
 import subprocess
 import platform
@@ -81,6 +82,59 @@ def _is_running(app_name: str) -> bool:
 
 
 def _launch_windows(app_name: str) -> bool:
+    app_lower = app_name.lower().strip()
+
+    # Direct Chrome launching
+    if app_lower in ("chrome", "google chrome", "browser", "internet", "web"):
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            shutil.which("chrome"),
+        ]
+        for cp in chrome_paths:
+            if cp and (os.path.exists(cp) if os.path.isabs(cp) else True):
+                try:
+                    subprocess.Popen([cp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(1.0)
+                    return True
+                except Exception:
+                    pass
+
+    # Direct Spotify launching (app or Chrome web player fallback)
+    if app_lower in ("spotify", "spotify music", "spotify web"):
+        spotify_paths = [
+            os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\Spotify.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Spotify\Spotify.exe"),
+            r"C:\Program Files\Spotify\Spotify.exe",
+            shutil.which("spotify"),
+        ]
+        for sp in spotify_paths:
+            if sp and os.path.exists(sp):
+                try:
+                    subprocess.Popen([sp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(1.0)
+                    return True
+                except Exception:
+                    pass
+
+        # If Spotify desktop is not installed, open Spotify in Google Chrome
+        from actions.spotify_controller import _open_url_in_chrome
+        _open_url_in_chrome("https://open.spotify.com")
+        time.sleep(1.0)
+        return True
+
+    # Try direct binary in PATH or Windows System32
+    bin_path = shutil.which(app_name) or shutil.which(f"{app_name}.exe")
+    if bin_path:
+        try:
+            subprocess.Popen([bin_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1.0)
+            return True
+        except Exception:
+            pass
+
+    # Fallback to Start Menu search
     try:
         import pyautogui
         pyautogui.PAUSE = 0.1

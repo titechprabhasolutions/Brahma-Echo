@@ -107,6 +107,22 @@ flight_finder
   destination: string (required)
   date: string (required)
 
+spotify_controller
+  action: "play" | "pause" | "toggle" | "next" | "previous" | "volume_up" | "volume_down" | "search_play" | "open_spotify" (required)
+  query: string (for search_play, song or artist name)
+
+calendar_scheduler
+  action: "add_event" | "list_events" | "check_day" | "delete_event" | "get_upcoming" | "export_ics" (required)
+  title: string (for add_event)
+  date: string (YYYY-MM-DD or "today", "tomorrow")
+  time: string (HH:MM)
+  duration_minutes: number (optional, default: 30)
+  location: string (optional)
+
+daily_briefing
+  category: "all" | "tech" | "world" (optional)
+  Use whenever user asks for their morning briefing, daily briefing, or news update.
+
 claude_code
   description: string (required)
   workspace_path: string (optional)
@@ -155,12 +171,30 @@ reminder | date: [today], time: [now+30min], message: "Reminder"
 Goal: "Build a premium website for my AI assistant"
 Steps:
 
-claude_code | description: "Create a premium, futuristic desktop AI assistant website with strong hero, product features, social proof, FAQ, and CTA sections."
-
-Goal: "Create a SaaS AI studio like Google AI Studio"
+Goal: "Play Starboy song on Spotify"
 Steps:
 
-claude_code | description: "Create a full-stack SaaS AI studio with a sidebar, workspace, prompt playground, API area, billing, and settings panels."
+spotify_controller | action: search_play, query: "Starboy"
+
+Goal: "Play some relaxing music"
+Steps:
+
+spotify_controller | action: search_play, query: "relaxing music"
+
+Goal: "Pause the music"
+Steps:
+
+spotify_controller | action: pause
+
+Goal: "Skip to next song"
+Steps:
+
+spotify_controller | action: next
+
+Goal: "Add team sync to my calendar tomorrow at 4pm"
+Steps:
+
+calendar_scheduler | action: add_event, title: "Team sync", date: "tomorrow", time: "16:00", duration_minutes: 30
 
 OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 {

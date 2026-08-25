@@ -310,6 +310,12 @@ def _extract_preview(lines: list[str], app: str) -> str:
 
 _current_player_alias = None
 _current_audio_path = None
+_speech_sink: Callable[[str], None] | None = None
+
+
+def set_speech_sink(sink: Callable[[str], None] | None) -> None:
+    global _speech_sink
+    _speech_sink = sink
 
 def _cleanup_current_audio() -> None:
     global _current_player_alias, _current_audio_path
@@ -333,7 +339,7 @@ def _cleanup_current_audio() -> None:
         _current_audio_path = None
 
 
-def speak_native(text: str) -> None:
+def _speak_edge_native(text: str) -> None:
     global _current_player_alias, _current_audio_path
     text = (text or "").strip()
     if not text:
@@ -387,6 +393,21 @@ def speak_native(text: str) -> None:
         print(f"[AttentionMonitor] Edge TTS playback failed: {exc}")
         _cleanup_current_audio()
         return
+
+
+_speech_sink = None
+
+
+def set_speech_sink(sink_fn) -> None:
+    global _speech_sink
+    _speech_sink = sink_fn
+
+
+def speak_native(text: str) -> None:
+    text = (text or "").strip()
+    if not text:
+        return
+    _speak_edge_native(text)
 
 
 def stop_native_speech() -> None:
