@@ -6,8 +6,12 @@ __pycache__/
 
 # Runtime logs and generated files
 *.log
+log.txt
 crash_log.txt
 downloads/
+memory/calendar_events.json
+config/identity.json
+config/brahma_connect/devices.json
 
 # Local secrets and environment-specific config
 config/api_keys.json

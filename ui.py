@@ -2349,17 +2349,13 @@ class ChatBubble(QFrame):
 
         outer.addLayout(head)
 
-        self._browser = QTextBrowser()
-        self._browser.setFrameShape(QFrame.Shape.NoFrame)
+        self._browser = QLabel()
+        self._browser.setTextFormat(Qt.TextFormat.RichText)
+        self._browser.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._browser.setOpenExternalLinks(True)
-        self._browser.setReadOnly(True)
-        self._browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._browser.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
-        self._browser.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self._browser.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
-        self._browser.setStyleSheet("QTextBrowser { background: transparent; border: none; color: #f4f6f8; padding: 0; margin: 0; }")
-        self._browser.document().setDocumentMargin(0)
+        self._browser.setWordWrap(True)
+        self._browser.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self._browser.setStyleSheet("QLabel { background: transparent; border: none; color: #f4f6f8; padding: 0; margin: 0; }")
         self._render_text(text or "")
 
         outer.addWidget(self._browser)
@@ -2372,17 +2368,9 @@ class ChatBubble(QFrame):
 
         if animate and role == "assistant":
             self._start_typing_animation()
-        else:
-            QTimer.singleShot(0, self._fit_to_content)
 
     def _render_text(self, text: str, final: bool = True):
-        if final:
-            try:
-                self._browser.setMarkdown(text or "")
-                return
-            except Exception:
-                pass
-        self._browser.setHtml(_markdown_to_html(text or "", self._role))
+        self._browser.setText(_markdown_to_html(text or "", self._role))
 
     def _start_typing_animation(self):
         self._typing_timer = QTimer(self)
@@ -2400,36 +2388,6 @@ class ChatBubble(QFrame):
             except Exception:
                 pass
             self._render_text(self._full_text, final=True)
-            QTimer.singleShot(0, self._fit_to_content)
-
-    def _fit_to_content(self):
-        try:
-            doc = self._browser.document()
-            viewport = self.parentWidget()
-            while viewport is not None and not hasattr(viewport, "viewport"):
-                viewport = viewport.parentWidget()
-            viewport_width = viewport.viewport().width() if viewport and hasattr(viewport, "viewport") else self.width()
-            
-            max_w = int(viewport_width * 0.75) if viewport_width > 200 else 300
-            
-            doc.setTextWidth(-1)
-            ideal_w = int(doc.idealWidth()) + 16
-            
-            final_w = min(max(ideal_w, 40), max_w)
-            doc.setTextWidth(final_w)
-            
-            height = int(doc.size().height()) + 8
-            
-            self._browser.setFixedSize(final_w, height)
-            
-            self._browser.updateGeometry()
-            self.updateGeometry()
-        except Exception:
-            pass
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit_to_content()
 
 
 class HistoryConversationItem(QFrame):
@@ -2601,10 +2559,10 @@ class ConversationFeed(QScrollArea):
             self._layout.takeAt(self._layout.count() - 1)
         if role == "system":
             bubble = self._build_event_card(text, stamp, event_type=event_type)
-            self._layout.addWidget(bubble)
+            self._layout.addWidget(bubble, alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         elif role == "file":
             bubble = self._build_artifact_card(text, attachments=attachments, stamp=stamp)
-            self._layout.addWidget(bubble)
+            self._layout.addWidget(bubble, alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         elif role == "user":
             bubble = ChatBubble(role, name, text, stamp, attachments=attachments, parent=self, animate=animate)
             self._layout.addWidget(bubble, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
@@ -2612,10 +2570,7 @@ class ConversationFeed(QScrollArea):
             bubble = ChatBubble(role, name, text, stamp, attachments=attachments, parent=self, animate=animate)
             self._layout.addWidget(bubble, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         
-        if self._layout.count() > 0:
-            last_item = self._layout.itemAt(self._layout.count() - 1)
-            if last_item.spacerItem() is not None:
-                self._layout.takeAt(self._layout.count() - 1)
+
                 
         self._layout.addStretch(1)
         self._message_count += 1
@@ -7688,11 +7643,12 @@ class MainWindow(QMainWindow):
                 QPushButton:hover {{ border: 1px solid {C.WHITE}; }}
             """)
 
-    def _send(self):
-        txt = self._input.text().strip()
+    def _send(self, txt: str = ""):
+        if not txt:
+            txt = self._input.text().strip()
+            self._input.clear()
         if not txt:
             return
-        self._input.clear()
         self.submit_command(txt)
 
     def submit_command(self, txt: str, source: str = "local"):

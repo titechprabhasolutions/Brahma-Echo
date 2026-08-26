@@ -62,6 +62,7 @@ from or_client import client as openrouter_client
 from workspace_store import store as workspace_store
 from smart_home.service import SmartHomeService
 from plugin_manager import PluginManager
+from updater import restart_application, update_from_github
 
 try:
     from dashboard.server import DashboardServer
@@ -2792,6 +2793,13 @@ class BrahmaLive:
 
 def main():
     _startup_log("main entered")
+    try:
+        if update_from_github(BASE_DIR):
+            _startup_log("updated from GitHub; restarting")
+            restart_application(BASE_DIR)
+            return
+    except Exception as exc:
+        _startup_log(f"GitHub update skipped: {exc}")
     _ensure_desktop_shortcut()
     ui = BrahmaUI(str(BASE_DIR / "assets" / "Brahma_Lite_Logo.png"), show_immediately=True)
     dashboard = None
