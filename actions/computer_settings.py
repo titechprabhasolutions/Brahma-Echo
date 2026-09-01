@@ -9,7 +9,7 @@ from pathlib import Path
 
 try:
     import pyautogui
-    pyautogui.FAILSAFE = True
+    pyautogui.FAILSAFE = False
     pyautogui.PAUSE    = 0.05
     _PYAUTOGUI = True
 except ImportError:
@@ -23,11 +23,21 @@ except ImportError:
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
+if _OS == "Windows":
+    _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
+else:
+    _WIN_HIDE: dict = {}
+
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
+
+def _get_api_key() -> str:
+    path = _get_base_dir() / "config" / "api_keys.json"
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)["gemini_api_key"]
 
 def _get_macos_wifi_interface() -> str:
     try:
@@ -47,7 +57,14 @@ def _get_macos_wifi_interface() -> str:
 
 def volume_up():
     if _OS == "Windows":
-        for _ in range(5): pyautogui.press("volumeup")
+        try:
+            from pycaw.pycaw import AudioUtilities
+            devices = AudioUtilities.GetSpeakers()
+            volume = devices.EndpointVolume
+            current = volume.GetMasterVolumeLevelScalar()
+            volume.SetMasterVolumeLevelScalar(min(1.0, current + 0.1), None)
+        except Exception:
+            for _ in range(5): pyautogui.press("volumeup")
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e",
             "set volume output volume (output volume of (get volume settings) + 10)"],
@@ -58,7 +75,14 @@ def volume_up():
 
 def volume_down():
     if _OS == "Windows":
-        for _ in range(5): pyautogui.press("volumedown")
+        try:
+            from pycaw.pycaw import AudioUtilities
+            devices = AudioUtilities.GetSpeakers()
+            volume = devices.EndpointVolume
+            current = volume.GetMasterVolumeLevelScalar()
+            volume.SetMasterVolumeLevelScalar(max(0.0, current - 0.1), None)
+        except Exception:
+            for _ in range(5): pyautogui.press("volumedown")
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e",
             "set volume output volume (output volume of (get volume settings) - 10)"],
@@ -81,15 +105,10 @@ def volume_set(value: int):
     value = max(0, min(100, int(value)))
     if _OS == "Windows":
         try:
-            import math
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            devices   = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            vol       = cast(interface, POINTER(IAudioEndpointVolume))
-            vol_db    = -65.25 if value == 0 else max(-65.25, 20 * math.log10(value / 100))
-            vol.SetMasterVolumeLevel(vol_db, None)
+            from pycaw.pycaw import AudioUtilities
+            devices = AudioUtilities.GetSpeakers()
+            volume = devices.EndpointVolume
+            volume.SetMasterVolumeLevelScalar(value / 100.0, None)
             return
         except Exception as e:
             print(f"[Settings] pycaw failed, using keypress fallback: {e}")
@@ -128,7 +147,7 @@ def brightness_up():
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods)"
                  ".WmiSetBrightness(1, [math]::Min(100, "
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness + 10))"],
-                capture_output=True, timeout=5
+                capture_output=True, timeout=5, **_WIN_HIDE
             )
         except Exception as e:
             print(f"[Settings] Brightness up failed on Windows: {e}")
@@ -157,7 +176,7 @@ def brightness_down():
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods)"
                  ".WmiSetBrightness(1, [math]::Max(0, "
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness - 10))"],
-                capture_output=True, timeout=5
+                capture_output=True, timeout=5, **_WIN_HIDE
             )
         except Exception as e:
             print(f"[Settings] Brightness down failed on Windows: {e}")
@@ -196,7 +215,14 @@ def maximize_window():
 def snap_left():
     if _OS == "Windows":
         pyautogui.hotkey("win", "left")
-    elif _OS == "Linux":
+    elif _OS == "Darwin":
+        # macOS has no built-in snap; try Rectangle app shortcut if installed
+        try:
+            subprocess.run(["open", "-a", "Rectangle"], capture_output=True, timeout=1)
+        except Exception:
+            pass
+        pyautogui.hotkey("ctrl", "option", "left")
+    else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
                 capture_output=True)
@@ -206,7 +232,13 @@ def snap_left():
 def snap_right():
     if _OS == "Windows":
         pyautogui.hotkey("win", "right")
-    elif _OS == "Linux":
+    elif _OS == "Darwin":
+        try:
+            subprocess.run(["open", "-a", "Rectangle"], capture_output=True, timeout=1)
+        except Exception:
+            pass
+        pyautogui.hotkey("ctrl", "option", "right")
+    else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],
                 capture_output=True)
@@ -465,7 +497,7 @@ def toggle_wifi():
                  "$adapter = Get-NetAdapter | Where-Object {$_.PhysicalMediaType -eq 'Native 802.11'};"
                  "if ($adapter.Status -eq 'Up') { Disable-NetAdapter -Name $adapter.Name -Confirm:$false }"
                  "else { Enable-NetAdapter -Name $adapter.Name -Confirm:$false }"],
-                capture_output=True, timeout=10
+                capture_output=True, timeout=10, **_WIN_HIDE
             )
         except Exception as e:
             print(f"[Settings] toggle_wifi Windows failed: {e}")
@@ -479,7 +511,7 @@ def toggle_wifi():
 
 def restart_computer():
     if _OS == "Windows":
-        subprocess.run(["shutdown", "/r", "/t", "10"], capture_output=True)
+        subprocess.run(["shutdown", "/r", "/t", "10"], capture_output=True, **_WIN_HIDE)
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e",
             'tell application "System Events" to restart'],
@@ -562,30 +594,41 @@ ACTION_MAP: dict[str, callable] = {
 _DANGEROUS_ACTIONS = {"restart", "shutdown"}
 
 
+
 def _detect_action(description: str) -> dict:
-    from or_client import client
+
+    from google import genai as _genai
+    _client = _genai.Client(api_key=_get_api_key())
 
     available = ", ".join(sorted(ACTION_MAP.keys())) + \
                 ", volume_set, type_text, press_key, reload_n"
 
     prompt = f"""You are an intent detector for a computer control assistant.
+
 The user issued a command (possibly in any language): "{description}"
+
 Available actions: {available}
-Return ONLY a valid JSON object: {{"action": "action_name", "value": null_or_value}}
+
+Return ONLY a valid JSON object:
+{{"action": "action_name", "value": null_or_value}}
+
 Rules:
+- Pick the single best matching action from the available list.
 - For volume_set: value is an integer 0-100.
 - For type_text: value is the exact text to type.
 - For press_key: value is the key name (e.g. "f5", "tab", "enter").
-- For reload_n: value is an integer.
+- For reload_n: value is an integer (number of times to reload).
+- If no clear match, pick the closest action.
 - Return ONLY the JSON, no explanation, no markdown."""
 
     try:
-        raw  = client.chat_json(prompt, system="Return only valid JSON. No extra text.")
-        return raw
+        resp = _client.models.generate_content(model="gemini-flash-lite-latest", contents=prompt)
+        text = re.sub(r"```(?:json)?", "", resp.text).strip().rstrip("`").strip()
+        return json.loads(text)
     except Exception as e:
         print(f"[Settings] Intent detection failed: {e}")
         return {"action": description.lower().replace(" ", "_"), "value": None}
-    
+
 def computer_settings(
     parameters: dict = None,
     response=None,

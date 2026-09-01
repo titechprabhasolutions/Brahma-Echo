@@ -18,6 +18,7 @@ Pillow
 psutil
 comtypes
 pycaw               
+instagrapi
 win10toast          
 send2trash
 youtube-transcript-api

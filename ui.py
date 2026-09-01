@@ -46,6 +46,7 @@ from gesture_utils import estimate_gesture_state, GestureTracker
 from smart_home import SmartHomeService
 from smart_home_page_new import BrahmaHomePage, _DeviceTile
 from workspace_store import store as workspace_store
+from core.identity import identity
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -4229,6 +4230,10 @@ class SetupOverlay(QWidget):
         lay.addWidget(self._stack)
 
         self._build_stage1()
+        self._build_stage_identity()
+        self._build_stage_owner()
+        self._build_stage_behavior()
+        self._build_stage_shared()
         self._build_stage2()
         self._build_stage3()
         self._build_stage4()
@@ -4239,31 +4244,21 @@ class SetupOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Heavy dark overlay to completely hide dashboard UI and make a full faded background
+        painter.fillRect(self.rect(), QColor(3, 5, 8, 245))
+
         w, h = self.width(), self.height()
         cx, cy = w / 2.0, h / 2.0
 
-        # Heavy dark overlay to completely hide dashboard UI
-        painter.fillRect(self.rect(), QColor(3, 5, 8, 245))
-
-        # Cut a soft circular window for the reactor
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
-        gradient = QRadialGradient(cx, cy, 280.0)
-        gradient.setColorAt(0.0, QColor(0, 0, 0, 220))
-        gradient.setColorAt(0.5, QColor(0, 0, 0, 150))
-        gradient.setColorAt(0.75, QColor(0, 0, 0, 60))
-        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setBrush(QBrush(gradient))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(cx, cy), 280.0, 280.0)
-
-        # Restore normal compositing and add a subtle gold vignette ring
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        # Add a subtle gold vignette ring over the full faded background
         ring_grad = QRadialGradient(cx, cy, 320.0)
         ring_grad.setColorAt(0.0, QColor(0, 0, 0, 0))
         ring_grad.setColorAt(0.7, QColor(0, 0, 0, 0))
         ring_grad.setColorAt(0.85, QColor(255, 179, 0, 12))
         ring_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setBrush(QBrush(ring_grad))
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(cx, cy), 320.0, 320.0)
 
     def _call_js(self, func_call):
@@ -4354,9 +4349,215 @@ class SetupOverlay(QWidget):
             self._s1_idx += 1
         else:
             self._s1_timer.stop()
-            QTimer.singleShot(2500, lambda: self._stack.setCurrentIndex(1))
+            QTimer.singleShot(2500, self._finish_stage1)
 
     # ── STAGE 2: Provider Selection ────────────────────────────────
+
+    # ── STAGE 1.1: Assistant Identity ────────────────────────────────
+    def _build_stage_identity(self):
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch(2)
+
+        title = QLabel("DEFINE YOUR ASSISTANT")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: rgba(255,255,255,0.7); background: transparent; letter-spacing: 2px;")
+        lay.addWidget(title)
+        
+        sub = QLabel("Every assistant needs an identity.")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setFont(QFont("Segoe UI", 10))
+        sub.setStyleSheet("color: rgba(255,255,255,0.4); background: transparent;")
+        lay.addWidget(sub)
+        lay.addSpacing(20)
+
+        form_lay = QGridLayout()
+        form_lay.setSpacing(16)
+        
+        lbl_ast = QLabel("Assistant Name")
+        lbl_ast.setStyleSheet("color: #ffaa30;")
+        self._inp_ast = QLineEdit(identity.get_assistant_name())
+        self._inp_ast.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        form_lay.addWidget(lbl_ast, 0, 0)
+        form_lay.addWidget(self._inp_ast, 0, 1)
+
+        lbl_app = QLabel("Application Name")
+        lbl_app.setStyleSheet("color: #ffaa30;")
+        self._inp_app = QLineEdit(identity.get_application_name())
+        self._inp_app.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        form_lay.addWidget(lbl_app, 1, 0)
+        form_lay.addWidget(self._inp_app, 1, 1)
+
+        container = QWidget()
+        container.setFixedWidth(400)
+        container.setLayout(form_lay)
+        lay.addWidget(container, 0, Qt.AlignmentFlag.AlignCenter)
+
+        btn = QPushButton("CONTINUE →")
+        btn.setFixedSize(160, 40)
+        btn.setStyleSheet("background: rgba(255, 170, 48, 0.2); color: #ffaa30; border: 1px solid #ffaa30; border-radius: 20px;")
+        btn.clicked.connect(self._save_identity_and_next)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addStretch(2)
+        self._stack.addWidget(page)
+
+    def _save_identity_and_next(self):
+        identity.set_assistant_name(self._inp_ast.text().strip() or "Brahma")
+        identity.set_application_name(self._inp_app.text().strip() or "Brahma Echo")
+        self._stack.setCurrentIndex(2)
+
+    # ── STAGE 1.2: Owner Profile ────────────────────────────────
+    def _build_stage_owner(self):
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch(2)
+
+        title = QLabel("WHO AM I ASSISTING?")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: rgba(255,255,255,0.7); background: transparent; letter-spacing: 2px;")
+        lay.addWidget(title)
+        
+        sub = QLabel("Tell me a little about yourself so I can work better with you.")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setFont(QFont("Segoe UI", 10))
+        sub.setStyleSheet("color: rgba(255,255,255,0.4); background: transparent;")
+        lay.addWidget(sub)
+        lay.addSpacing(20)
+
+        form_lay = QGridLayout()
+        form_lay.setSpacing(16)
+        
+        lbl_own = QLabel("Your Name")
+        lbl_own.setStyleSheet("color: #ffaa30;")
+        self._inp_own = QLineEdit(identity.get_owner_name())
+        self._inp_own.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        form_lay.addWidget(lbl_own, 0, 0)
+        form_lay.addWidget(self._inp_own, 0, 1)
+
+        lbl_role = QLabel("Your Role")
+        lbl_role.setStyleSheet("color: #ffaa30;")
+        self._inp_role = QLineEdit(identity.get_owner_role())
+        self._inp_role.setPlaceholderText("e.g. Student, Developer")
+        self._inp_role.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        form_lay.addWidget(lbl_role, 1, 0)
+        form_lay.addWidget(self._inp_role, 1, 1)
+
+        container = QWidget()
+        container.setFixedWidth(400)
+        container.setLayout(form_lay)
+        lay.addWidget(container, 0, Qt.AlignmentFlag.AlignCenter)
+
+        btn = QPushButton("CONTINUE →")
+        btn.setFixedSize(160, 40)
+        btn.setStyleSheet("background: rgba(255, 170, 48, 0.2); color: #ffaa30; border: 1px solid #ffaa30; border-radius: 20px;")
+        btn.clicked.connect(self._save_owner_and_next)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addStretch(2)
+        self._stack.addWidget(page)
+
+    def _save_owner_and_next(self):
+        identity.set_owner_name(self._inp_own.text().strip())
+        identity.set_owner_role(self._inp_role.text().strip())
+        self._stack.setCurrentIndex(3)
+
+    # ── STAGE 1.3: Behavior ────────────────────────────────
+    def _build_stage_behavior(self):
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch(2)
+
+        title = QLabel("HOW SHOULD I ASSIST YOU?")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: rgba(255,255,255,0.7); background: transparent; letter-spacing: 2px;")
+        lay.addWidget(title)
+        lay.addSpacing(20)
+
+        self._combo_mode = QComboBox()
+        self._combo_mode.addItems(["professional", "casual", "technical", "minimal", "proactive"])
+        self._combo_mode.setCurrentText(identity.get_behavior_mode())
+        self._combo_mode.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        self._combo_mode.setFixedWidth(300)
+        lay.addWidget(self._combo_mode, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        sub = QLabel("Custom Instructions (Optional)")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet("color: #ffaa30; margin-top: 10px;")
+        lay.addWidget(sub)
+        
+        self._inp_custom = QTextEdit(identity.get_custom_instructions())
+        self._inp_custom.setFixedSize(400, 80)
+        self._inp_custom.setStyleSheet("background: rgba(255,255,255,0.1); color: #fff; padding: 6px; border-radius: 4px;")
+        lay.addWidget(self._inp_custom, 0, Qt.AlignmentFlag.AlignCenter)
+
+        lay.addSpacing(20)
+        btn = QPushButton("CONTINUE →")
+        btn.setFixedSize(160, 40)
+        btn.setStyleSheet("background: rgba(255, 170, 48, 0.2); color: #ffaa30; border: 1px solid #ffaa30; border-radius: 20px;")
+        btn.clicked.connect(self._save_behavior_and_next)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addStretch(2)
+        self._stack.addWidget(page)
+
+    def _save_behavior_and_next(self):
+        identity.set_behavior_mode(self._combo_mode.currentText())
+        identity.set_custom_instructions(self._inp_custom.toPlainText().strip())
+        self._stack.setCurrentIndex(4)
+
+    # ── STAGE 1.4: Shared Computer ────────────────────────────────
+    def _build_stage_shared(self):
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch(2)
+
+        title = QLabel("WHO USES THIS COMPUTER?")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: rgba(255,255,255,0.7); background: transparent; letter-spacing: 2px;")
+        lay.addWidget(title)
+        lay.addSpacing(20)
+        
+        btn_personal = QPushButton("THIS IS MY PERSONAL COMPUTER")
+        btn_personal.setFixedSize(300, 50)
+        btn_personal.setStyleSheet("background: rgba(255, 170, 48, 0.1); color: #ffaa30; border: 1px solid #ffaa30; border-radius: 8px;")
+        btn_personal.clicked.connect(lambda: self._save_shared_and_next(False))
+        lay.addWidget(btn_personal, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addSpacing(10)
+        
+        btn_shared = QPushButton("THIS IS A SHARED COMPUTER")
+        btn_shared.setFixedSize(300, 50)
+        btn_shared.setStyleSheet("background: rgba(255,255,255, 0.05); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px;")
+        btn_shared.clicked.connect(lambda: self._save_shared_and_next(True))
+        lay.addWidget(btn_shared, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addStretch(2)
+        self._stack.addWidget(page)
+        
+    def _save_shared_and_next(self, shared: bool):
+        identity.set_shared_computer(shared)
+        self._stack.setCurrentIndex(5)
+
+
+    def _finish_stage1(self):
+        if not identity.is_setup_complete():
+            self._stack.setCurrentIndex(1)
+        else:
+            self._stack.setCurrentIndex(5)
+
     def _build_stage2(self):
         page = QWidget()
         page.setStyleSheet("background: transparent;")
@@ -4476,7 +4677,7 @@ class SetupOverlay(QWidget):
 
     def _goto_stage3(self):
         self._call_js("if(window.triggerPulse) window.triggerPulse();")
-        self._stack.setCurrentIndex(2)
+        self._stack.setCurrentIndex(6)
 
     # ── STAGE 3 & 4: API Input + Auth ──────────────────────────────
     def _build_stage3(self):
@@ -4670,7 +4871,7 @@ class SetupOverlay(QWidget):
     def _show_or_prompt(self):
         """After Gemini verified, ask if user wants to add OpenRouter too."""
         self._s3_box.hide()
-        page = self._stack.widget(2)
+        page = self._stack.widget(6)
         lay = page.layout()
 
         self._or_prompt_widget = QFrame()
@@ -4755,7 +4956,7 @@ class SetupOverlay(QWidget):
     def _show_or_input(self):
         """User wants to add OpenRouter."""
         self._or_prompt_widget.hide()
-        page = self._stack.widget(2)
+        page = self._stack.widget(6)
         lay = page.layout()
 
         self._or_box = QFrame()
@@ -4849,7 +5050,7 @@ class SetupOverlay(QWidget):
 
     def _show_color_stage(self):
         """Show color selection."""
-        page = self._stack.widget(2)
+        page = self._stack.widget(6)
         lay = page.layout()
 
         self._color_box = QFrame()
@@ -4942,7 +5143,7 @@ class SetupOverlay(QWidget):
 
     def _show_intro_final(self):
         """Show the Brahma Echo intro sequence."""
-        page = self._stack.widget(2)
+        page = self._stack.widget(6)
         lay = page.layout()
         self._intro_widget.setParent(None)
         lay.insertWidget(lay.count() - 1, self._intro_widget, 0, Qt.AlignmentFlag.AlignCenter)
@@ -4954,7 +5155,7 @@ class SetupOverlay(QWidget):
 
     def _show_intro(self):
         self._s3_box.hide()
-        page = self._stack.widget(2)
+        page = self._stack.widget(6)
         lay = page.layout()
         self._intro_widget.setParent(None)
         lay.insertWidget(lay.count() - 1, self._intro_widget, 0, Qt.AlignmentFlag.AlignCenter)
@@ -7195,16 +7396,9 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         if event:
             super().resizeEvent(event)
-        if self._overlay and self._overlay.isVisible():
-            size = self._overlay.sizeHint()
-            ow = max(360, size.width() or self._overlay.width() or 460)
-            oh = max(320, size.height() or self._overlay.height() or 390)
+        if self._overlay and self._overlay.isVisible() and self.centralWidget():
             cw = self.centralWidget()
-            self._overlay.setGeometry(
-                (cw.width()  - ow) // 2,
-                (cw.height() - oh) // 2,
-                ow, oh,
-            )
+            self._overlay.setGeometry(0, 0, cw.width(), cw.height())
         if hasattr(self, '_floating_gesture_card') and self.centralWidget():
             cw = self.centralWidget()
             self._floating_gesture_card.move(cw.width() - self._floating_gesture_card.width() - 30, 20)
@@ -8048,6 +8242,8 @@ class MainWindow(QMainWindow):
 
     def _show_setup(self, defaults: dict | None = None):
         try:
+            if hasattr(self, '_floating_gesture_card'):
+                self._floating_gesture_card.hide()
             if self._overlay:
                 self._overlay.hide()
                 self._overlay.deleteLater()
@@ -8091,6 +8287,8 @@ class MainWindow(QMainWindow):
                 self._overlay.hide()
                 self._overlay.deleteLater()
                 self._overlay = None
+            if hasattr(self, '_floating_gesture_card'):
+                self._floating_gesture_card.show()
             self._apply_state("LISTENING")
             self._log.append_log(f"SYS: Initialised. OS={os_name.upper()}. Brahma Echo online.")
         except Exception as e:
@@ -9046,6 +9244,101 @@ class SystemConnectivityPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
 
+
+        
+
+
+        # Instagram Connect
+        ig_card = self._card("Instagram Connect", "Connect your personal Instagram account to allow Brahma Echo to manage your DMs.")
+        ig_lay = ig_card.layout()
+
+        ig_user_row = QHBoxLayout()
+        ig_user_row.addWidget(QLabel("Username"))
+        self._ig_username = QLineEdit()
+        self._ig_username.setPlaceholderText("Instagram Username")
+        ig_user_row.addWidget(self._ig_username)
+        ig_lay.addLayout(ig_user_row)
+
+        ig_pass_row = QHBoxLayout()
+        ig_pass_row.addWidget(QLabel("Password"))
+        self._ig_password = QLineEdit()
+        self._ig_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ig_password.setPlaceholderText("Instagram Password")
+        ig_pass_row.addWidget(self._ig_password)
+        ig_lay.addLayout(ig_pass_row)
+        
+        ig_btns_row = QHBoxLayout()
+        
+        self._ig_connect_btn = QPushButton("Connect")
+        self._ig_connect_btn.clicked.connect(self._handle_ig_connect)
+        ig_btns_row.addWidget(self._ig_connect_btn)
+        
+        self._ig_disconnect_btn = QPushButton("Disconnect")
+        self._ig_disconnect_btn.clicked.connect(self._handle_ig_disconnect)
+        ig_btns_row.addWidget(self._ig_disconnect_btn)
+
+        ig_lay.addLayout(ig_btns_row)
+        
+        lay.addWidget(ig_card)
+        
+        # Pre-fill from API keys if they exist
+        try:
+            with open(Path("config/api_keys.json"), "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if d.get("instagram_username"):
+                    self._ig_username.setText(d.get("instagram_username"))
+                if d.get("instagram_password"):
+                    self._ig_password.setText(d.get("instagram_password"))
+        except Exception:
+            pass
+
+
+        # Identity & Profile
+        identity_card = self._card("Identity & Profile", "Configure assistant identity, user profile, and behavior.")
+        ilay = identity_card.layout()
+        
+        # Assistant Settings
+        ast_row = QHBoxLayout()
+        ast_row.addWidget(QLabel("Assistant Name"))
+        self._set_ast_name = QLineEdit(identity.get_assistant_name())
+        self._set_ast_name.textChanged.connect(lambda t: identity.set_assistant_name(t.strip() or "Brahma"))
+        ast_row.addWidget(self._set_ast_name)
+        ilay.addLayout(ast_row)
+        
+        app_row = QHBoxLayout()
+        app_row.addWidget(QLabel("Application Name"))
+        self._set_app_name = QLineEdit(identity.get_application_name())
+        self._set_app_name.textChanged.connect(lambda t: identity.set_application_name(t.strip() or "Brahma Echo"))
+        app_row.addWidget(self._set_app_name)
+        ilay.addLayout(app_row)
+
+        # Owner Profile
+        own_row = QHBoxLayout()
+        own_row.addWidget(QLabel("Your Name"))
+        self._set_own_name = QLineEdit(identity.get_owner_name())
+        self._set_own_name.textChanged.connect(lambda t: identity.set_owner_name(t.strip()))
+        own_row.addWidget(self._set_own_name)
+        ilay.addLayout(own_row)
+
+        role_row = QHBoxLayout()
+        role_row.addWidget(QLabel("Your Role"))
+        self._set_own_role = QLineEdit(identity.get_owner_role())
+        self._set_own_role.textChanged.connect(lambda t: identity.set_owner_role(t.strip()))
+        role_row.addWidget(self._set_own_role)
+        ilay.addLayout(role_row)
+
+        # Behavior
+        beh_row = QHBoxLayout()
+        beh_row.addWidget(QLabel("Behavior Mode"))
+        self._set_beh_mode = QComboBox()
+        self._set_beh_mode.addItems(["professional", "casual", "technical", "minimal", "proactive"])
+        self._set_beh_mode.setCurrentText(identity.get_behavior_mode())
+        self._set_beh_mode.currentTextChanged.connect(lambda t: identity.set_behavior_mode(t))
+        beh_row.addWidget(self._set_beh_mode)
+        ilay.addLayout(beh_row)
+
+        lay.addWidget(identity_card)
+
         # AI Providers
         card = self._card("AI Providers", "Only the supported providers are shown here.")
         lay1 = card.layout()
@@ -9253,6 +9546,135 @@ class SystemConnectivityPage(QWidget):
 
         lay.addStretch(1)
         return col
+
+
+    def _handle_ig_disconnect(self):
+        try:
+            import json
+            from pathlib import Path
+            with open("config/api_keys.json", "r", encoding="utf-8") as f:
+                d = json.load(f)
+            d["instagram_username"] = ""
+            d["instagram_password"] = ""
+            with open("config/api_keys.json", "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=4)
+                
+            session_path = Path("config/ig_session.json")
+            if session_path.exists():
+                session_path.unlink()
+                
+            from actions.instagram_chat import stop_daemon
+            stop_daemon()
+            
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Disconnected", "Instagram account disconnected.")
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Error disconnecting Instagram: {e}")
+
+    class IGLoginWorker(__import__('PyQt6').QtCore.QThread):
+        finished_success = __import__('PyQt6').QtCore.pyqtSignal()
+        finished_error = __import__('PyQt6').QtCore.pyqtSignal(str)
+        request_2fa = __import__('PyQt6').QtCore.pyqtSignal()
+        request_challenge = __import__('PyQt6').QtCore.pyqtSignal()
+        
+        def __init__(self, username, password):
+            super().__init__()
+            self.username = username
+            self.password = password
+            self.code_event = __import__('threading').Event()
+            self.code = None
+            
+        def run(self):
+            try:
+                from instagrapi import Client
+                from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired
+                cl = Client()
+                try:
+                    cl.login(self.username, self.password)
+                except TwoFactorRequired:
+                    self.request_2fa.emit()
+                    self.code_event.wait()
+                    if not self.code:
+                        raise Exception("2FA code not provided.")
+                    cl.two_factor_login(self.code)
+                except ChallengeRequired:
+                    self.request_challenge.emit()
+                    self.code_event.wait()
+                    if not self.code:
+                        raise Exception("Challenge code not provided.")
+                    cl.challenge_resolve(self.code)
+                cl.dump_settings("config/ig_session.json")
+                from actions.instagram_chat import stop_daemon, start_daemon
+                stop_daemon()
+                start_daemon()
+                self.finished_success.emit()
+            except Exception as e:
+                self.finished_error.emit(str(e))
+
+    def _handle_ig_connect(self):
+        username = self._ig_username.text().strip()
+        password = self._ig_password.text().strip()
+        
+        from PyQt6.QtWidgets import QMessageBox
+        import json
+        
+        if not username or not password:
+            QMessageBox.warning(self, "Error", "Please enter both username and password.")
+            return
+            
+        self._ig_connect_btn.setEnabled(False)
+        self._ig_connect_btn.setText("Connecting...")
+        
+        # Save credentials temporarily
+        try:
+            with open("config/api_keys.json", "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            d = {}
+            
+        d["instagram_username"] = username
+        d["instagram_password"] = password
+        
+        with open("config/api_keys.json", "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=4)
+            
+        self._ig_worker = self.IGLoginWorker(username, password)
+        self._ig_worker.finished_success.connect(self._ig_login_success)
+        self._ig_worker.finished_error.connect(self._ig_login_error)
+        self._ig_worker.request_2fa.connect(self._ig_login_2fa)
+        self._ig_worker.request_challenge.connect(self._ig_login_challenge)
+        self._ig_worker.start()
+
+    def _ig_login_success(self):
+        self._ig_connect_btn.setEnabled(True)
+        self._ig_connect_btn.setText("Connect")
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.information(self, "Success", "Instagram login successful and daemon started!")
+
+    def _ig_login_error(self, err_msg):
+        self._ig_connect_btn.setEnabled(True)
+        self._ig_connect_btn.setText("Connect")
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Error", f"Instagram login failed: {err_msg}")
+
+    def _ig_login_2fa(self):
+        from PyQt6.QtWidgets import QInputDialog
+        code, ok = QInputDialog.getText(self, "2-Factor Authentication", "Enter the 6-digit code sent to your device:")
+        if ok and code:
+            self._ig_worker.code = code
+        else:
+            self._ig_worker.code = None
+        self._ig_worker.code_event.set()
+
+    def _ig_login_challenge(self):
+        from PyQt6.QtWidgets import QInputDialog
+        code, ok = QInputDialog.getText(self, "Challenge Required", "Enter the verification code sent to your email/phone:")
+        if ok and code:
+            self._ig_worker.code = code
+        else:
+            self._ig_worker.code = None
+        self._ig_worker.code_event.set()
 
     def _pick_theme_color(self):
         color = QColorDialog.getColor(QColor(C.PRI), self, "Select App Theme Color")
@@ -10332,6 +10754,9 @@ class BrahmaUI:
 
     def set_brahma_connect_service(self, service):
         self._win.set_brahma_connect_service(service)
+
+
+    
 
     def show_main(self):
         try:
@@ -11821,6 +12246,9 @@ class BrahmaUI:
 
     def set_brahma_connect_service(self, service):
         self._win.set_brahma_connect_service(service)
+
+
+    
 
     def show_main(self):
         try:

@@ -407,7 +407,10 @@ def speak_native(text: str) -> None:
     text = (text or "").strip()
     if not text:
         return
-    _speak_edge_native(text)
+    if _speech_sink is not None:
+        _speech_sink(text)
+    else:
+        _speak_edge_native(text)
 
 
 def stop_native_speech() -> None:

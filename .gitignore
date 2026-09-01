@@ -51,3 +51,8 @@ dist/
 *.pyz
 *.zip
 *.whl
+ 
+# Secrets
+config/.email_key
+config/email_credentials.json
+config/ig_session.json

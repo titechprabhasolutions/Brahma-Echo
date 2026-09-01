@@ -1,15 +1,15 @@
 {
   "devices": {
-    "android_b24cb3": {
-      "device_id": "android_b24cb3",
-      "name": "M2012K11I",
+    "android_094a29": {
+      "device_id": "android_094a29",
+      "name": "Phone",
       "platform": "android",
       "os_version": "14",
       "agent_version": "1.0.0",
       "ip": "192.168.0.113",
-      "online": true,
-      "last_seen": "2026-08-10T09:31:24.446922+00:00",
-      "battery": 22,
+      "online": false,
+      "last_seen": "2026-08-20T10:36:22.571948+00:00",
+      "battery": 10,
       "capabilities": [
         "device_info",
         "battery",
@@ -22,11 +22,11 @@
         "wifi_state"
       ],
       "permissions": [],
-      "paired_at": "2026-08-10T09:31:24.427342+00:00",
-      "secret_hash": "4aee506f69a363241bd08f29c31ac5180363d5179074cf085e37f7bcd399b529",
+      "paired_at": "2026-08-20T09:45:21.997366+00:00",
+      "secret_hash": "cf384e066db07f923b02117b92d202f7a3e824852ed03a93a608352ce1c7b77c",
       "revoked": false,
       "connection_id": "",
-      "identity_fingerprint": "0f76d6f32b9a85c4",
+      "identity_fingerprint": "07d00fd30ba85925",
       "metadata": {}
     }
   }

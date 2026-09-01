@@ -59,14 +59,20 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 - Unified voice and typed command handling
 - Wake-word listening and responsive assistant activation
 - Dynamic screen inspection for context-aware answers
-- Automatic briefings with Edge TTS playback
+- **Unified Gemini Native Voice** for all system alerts and daily briefings
+- **True Interruption (Barge-in)** with dynamic noise-gating
+- **Proactive Engine** for spontaneous, context-aware interaction when idle
 - Gemini-first AI with OpenRouter fallback resilience
 
 ### Productivity & Automation
 
+- **System Health & Resource Manager** to monitor CPU/RAM and forcefully close frozen apps
+- **Background Monitors & Alerts** for polling crypto prices, website uptime, or memory spikes autonomously
+- **Smart Clipboard Analyzer** to instantly read and process copied text natively
 - Open and control Windows apps, windows, files, and system actions
 - Browser automation with Playwright-driven workflows
 - Contextual automation based on screen content and notifications
+- **Instagram AI Assistant** to poll DMs, notify you, and seamlessly take over chats or reply on your behalf
 - Reminder, meeting assistance, and notification management
 
 ### Content & Office Tools
@@ -78,6 +84,7 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 
 ### Integrations
 
+- Instagram DM bridge for reading and auto-replying to messages natively
 - Discord bridge for remote commands and collaboration
 - OpenRouter fallback for uninterrupted AI access
 - Configurable voice, UI, startup, and notification settings
@@ -121,7 +128,9 @@ Create `config/api_keys.json` with your keys:
 ```json
 {
   "gemini_api_key": "YOUR_GEMINI_API_KEY",
-  "openrouter_api_key": "YOUR_OPENROUTER_API_KEY"
+  "openrouter_api_key": "YOUR_OPENROUTER_API_KEY",
+  "instagram_username": "YOUR_IG_USERNAME",
+  "instagram_password": "YOUR_IG_PASSWORD"
 }
 ```
 

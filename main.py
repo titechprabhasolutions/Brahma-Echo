@@ -10,6 +10,7 @@ import time
 import random
 import traceback
 import os
+import pyperclip
 from pathlib import Path
 
 try:
@@ -68,6 +69,11 @@ try:
     from dashboard.server import DashboardServer
 except Exception:
     DashboardServer = None
+
+try:
+    from actions.instagram_chat import start_daemon as start_ig_daemon, set_ig_prompt_callback
+except ImportError:
+    start_ig_daemon = None
 
 try:
     from brahma_connect.service import get_service as get_brahma_connect_service
@@ -185,17 +191,43 @@ def _ensure_desktop_shortcut() -> None:
 
 def _load_system_prompt() -> str:
     try:
-        return PROMPT_PATH.read_text(encoding="utf-8")
+        base_prompt = PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
-        return (
+        base_prompt = (
             "You are Brahma Echo, a calm, direct, and professional AI assistant. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
             "Never simulate or guess results — always call the appropriate tool. "
             "If the user asks to create, build, launch, or open a website, always use the selected workspace folder."
         )
+        
+    try:
+        from core.identity import identity
+        ast_name = identity.get_assistant_name() or "Brahma Echo"
+        own_name = identity.get_owner_name() or "the user"
+        role = identity.get_owner_role()
+        mode = identity.get_behavior_mode()
+        
+        identity_str = f"You are {ast_name}. You are assisting {own_name}"
+        if role:
+            identity_str += f" (Role: {role}).\n"
+        else:
+            identity_str += ".\n"
+            
+        identity_str += f"Your current behavior mode is: {mode}.\n"
+        
+        custom = identity.get_custom_instructions()
+        if custom:
+            identity_str += f"Custom Instructions: {custom}\n\n"
+            
+        return identity_str + base_prompt
+    except Exception as e:
+        print(f"Error injecting identity: {e}")
+        return base_prompt
 
 
 def _speak_daily_briefing(ui=None) -> None:
+    if ui and getattr(ui, "_overlay", None) and ui._overlay.isVisible():
+        return
     try:
         from actions.daily_briefing import compile_daily_briefing
         from actions.attention_monitor import speak_native
@@ -246,6 +278,68 @@ def _gemini_text_reply(prompt: str) -> str:
         config={"temperature": 0.6},
     )
     return _extract_gemini_text(response)
+
+
+def _ig_gemini_reply(username: str, text: str) -> str:
+    system_prompt = (
+        "You are Brahma Echo, an AI personal assistant acting on behalf of your user. "
+        "You have taken over their Instagram chat with the user's permission. "
+        "Reply naturally, briefly, and conversationally to the incoming message. "
+        "Do not sound like a bot. Keep your replies under 2 sentences."
+    )
+    prompt = f"Instagram DM from {username}: {text}"
+    
+    try:
+        client = genai.Client(
+            api_key=_get_api_key(),
+            http_options={"api_version": "v1beta"},
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"{system_prompt}\n\nUser: {prompt}",
+            config={"temperature": 0.6},
+        )
+        return _extract_gemini_text(response)
+    except Exception as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or _is_gemini_limit_error(e):
+            print("[InstagramChat] Gemini Rate Limit hit, falling back to OpenRouter...")
+            try:
+                from or_client import client as openrouter_client
+                return openrouter_client.chat(prompt, system=system_prompt)
+            except Exception as or_e:
+                print(f"[InstagramChat] OpenRouter fallback failed: {or_e}")
+                return "Hey, I'm currently busy. I will get back to you later!"
+        print(f"[InstagramChat] Gemini Reply Error: {e}")
+        return "Hey, I'm currently busy. I will get back to you later!"
+
+
+def _clipboard_gemini_reply(text: str) -> str:
+    system_prompt = (
+        "You are Brahma Echo, a witty and helpful AI assistant. "
+        "The user just copied the following text to their clipboard. "
+        "Make a very short, interesting, or helpful 1-sentence comment or question about it. "
+        "Do not offer to 'help' or ask 'how can I help'. Just make a standalone witty observation or summary."
+    )
+    prompt = text
+    try:
+        client = genai.Client(
+            api_key=_get_api_key(),
+            http_options={"api_version": "v1beta"},
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"{system_prompt}\n\nClipboard Text: {prompt}",
+            config={"temperature": 0.8},
+        )
+        return _extract_gemini_text(response)
+    except Exception as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or _is_gemini_limit_error(e):
+            try:
+                from or_client import client as openrouter_client
+                return openrouter_client.chat(prompt, system=system_prompt)
+            except Exception:
+                pass
+        return "Interesting stuff you copied there!"
 
 
 def _looks_like_code_request(text: str) -> bool:
@@ -427,6 +521,166 @@ def _memory_context_for_request(text: str) -> str:
 
 
 TOOL_DECLARATIONS = [
+    {
+        "name": "computer_settings",
+        "description": (
+            "Controls the computer's OS-level settings and hardware. Use this to change brightness, "
+            "toggle Wi-Fi, change volume, lock the screen, sleep the display, or shut down/restart the computer. "
+            "Also handles keyboard inputs (scrolling, typing, taking screenshots, window snapping)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "Specific action if known (e.g., 'volume_up', 'volume_set', 'brightness_down', 'lock_screen', 'shutdown')"
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "Natural language description of what to do (e.g., 'turn the volume to 50%', 'put the computer to sleep')"
+                },
+                "value": {
+                    "type": "STRING",
+                    "description": "Any value associated with the action (e.g., '50' for volume level)"
+                },
+                "confirmed": {
+                    "type": "STRING",
+                    "description": "Pass 'yes' if the user explicitly confirmed a dangerous action like 'shutdown' or 'restart'."
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "dev_agent",
+        "description": (
+            "An autonomous coding agent that builds full projects, writes code, installs dependencies, "
+            "runs the project, and automatically fixes errors. Use this when the user asks you to 'write a script', "
+            "'build an app', 'code a program', or 'run a project'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "description": {
+                    "type": "STRING",
+                    "description": "A very detailed description of what the project should do."
+                },
+                "language": {
+                    "type": "STRING",
+                    "description": "The programming language to use (e.g., 'python', 'javascript')"
+                },
+                "project_name": {
+                    "type": "STRING",
+                    "description": "A short, snake_case name for the project folder."
+                }
+            },
+            "required": ["description"]
+        }
+    },
+    {
+        "name": "background_monitor",
+        "description": (
+            "Sets up a background monitor to check crypto prices, system RAM/CPU, or website uptime. "
+            "Use this when the user asks to be alerted when a condition is met (e.g., 'tell me if RAM goes over 90%' or 'alert me if bitcoin drops below 50000')."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'add' to create a monitor (default), 'list' to see active monitors."
+                },
+                "type": {
+                    "type": "STRING",
+                    "description": "One of: 'system', 'crypto', 'website'"
+                },
+                "target": {
+                    "type": "STRING",
+                    "description": "What to monitor (e.g. 'ram', 'cpu', 'bitcoin', 'https://example.com')"
+                },
+                "threshold": {
+                    "type": "NUMBER",
+                    "description": "The threshold value (e.g. 90 for 90%, 50000 for $50k)"
+                },
+                "condition": {
+                    "type": "STRING",
+                    "description": "'above' or 'below'"
+                },
+                "interval": {
+                    "type": "INTEGER",
+                    "description": "How often to check in seconds (default 60)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "system_manager",
+        "description": (
+            "Checks the system health (CPU, RAM, disk, battery) and lists top resource-hogging apps. "
+            "Can also be used to forcefully close or kill frozen or heavy applications."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "What to do: 'status' to check system health (default), or 'kill' to close an app."
+                },
+                "process_name": {
+                    "type": "STRING",
+                    "description": "The exact name of the process to kill (if action is 'kill'), e.g. 'chrome.exe' or 'Spotify'"
+                },
+                "pid": {
+                    "type": "INTEGER",
+                    "description": "The PID of the process to kill (if action is 'kill')"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "check_instagram_messages",
+        "description": (
+            "Checks your Instagram inbox for any recent unread or direct messages. "
+            "Use this when the user asks 'do I have any messages', 'check my instagram', or similar."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "clipboard_processor",
+        "description": (
+            "Instantly reads the current text copied to the user's Windows clipboard. "
+            "Use this whenever the user asks you to read, analyze, or fix what they just copied to their clipboard."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "instagram_reply",
+        "description": "Replies to a pending Instagram message or takes over the Instagram chat in auto-mode.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "Must be 'take_over' to handle it automatically, or 'manual_reply' to send a specific text message."
+                },
+                "reply_text": {
+                    "type": "STRING",
+                    "description": "The exact message to send to the user if action is 'manual_reply'."
+                }
+            },
+            "required": ["action"]
+        }
+    },
     {
         "name": "open_app",
         "description": (
@@ -1213,6 +1467,12 @@ class BrahmaLive:
             set_speech_sink(self.speak)
         except Exception:
             pass
+            
+        try:
+            from actions.background_monitor import set_monitor_speech_sink
+            set_monitor_speech_sink(self.speak)
+        except Exception as e:
+            print(f"[Main] Failed to init background monitor: {e}")
         self._meeting_lock = threading.Lock()
         self._meeting_active = False
         self._meeting_event: dict | None = None
@@ -1254,19 +1514,38 @@ class BrahmaLive:
         return True
 
     def _idle_speech_loop(self):
+        try:
+            from actions.proactive import ProactiveEngine
+            engine = ProactiveEngine(min_silence_secs=300, check_cooldown=600)  # Shorter defaults for testing
+        except ImportError:
+            engine = None
+
         while True:
-            time.sleep(random.uniform(240.0, 300.0))
+            time.sleep(60.0)
+            if not engine:
+                continue
+            
             try:
-                if self._should_announce_idle():
-                    message = random.choice(self._idle_prompts)
-                    self.ui.write_log(f"Brahma Echo: {message}")
+                if self.ui.muted or self._is_speaking or self._meeting_active or self._pending_attention:
+                    continue
+                
+                # Check if it should trigger using the engine's time monotonic logic
+                if engine.should_trigger(self._last_activity):
+                    engine.mark_triggered()
+                    prompt = engine.build_prompt(memory={})
+                    
                     if self.session and self._loop:
-                        self.speak(message)
-                    else:
-                        threading.Thread(target=speak_native, args=(message,), daemon=True).start()
-                    self._reset_idle_activity()
-            except Exception:
-                pass
+                        import asyncio
+                        async def _send():
+                            try:
+                                await self.session.send(input=prompt, end_of_turn=True)
+                            except Exception as e:
+                                print(f"[Proactive] Error: {e}")
+                        asyncio.run_coroutine_threadsafe(_send(), self._loop)
+                        self._reset_idle_activity()
+                    
+            except Exception as e:
+                print(f"[Proactive] Error: {e}")
 
     def _make_remote_key(self):
         if self._dashboard is None:
@@ -1306,6 +1585,10 @@ class BrahmaLive:
                 return
             # Still in reply mode but no pending reply event means reset and continue
             self._reply_mode = False
+
+        if getattr(self, "_ig_reply_mode", False):
+            if self._handle_ig_reply_flow(text):
+                return
 
         if getattr(self, "_email_mode", False):
             if self._handle_email_flow(text):
@@ -1417,6 +1700,8 @@ class BrahmaLive:
 
         memory_ctx = _memory_context_for_request(text)
         routed_text = f"{memory_ctx}\n\nCurrent User Request:\n{text}" if memory_ctx else text
+        if source == "instagram":
+            routed_text = f"Owner sent this via Instagram DM: {text}\n(SYSTEM: If this is an action like opening an app or running a command, you MUST execute it using your tools rather than just replying with text.)"
         if text.lower() in {"stop meeting mode", "end meeting mode", "close meeting mode"}:
             self._stop_meeting_mode("Meeting mode closed.")
             return
@@ -1426,7 +1711,7 @@ class BrahmaLive:
             self.ui.begin_task_workspace(text, _build_task_plan(text), source=source or "local")
         except Exception:
             pass
-        if self._handle_brahma_connect_command(text, source=source or "local"):
+        if source != "instagram" and self._handle_brahma_connect_command(text, source=source or "local"):
             return
         if self._handle_smart_home_command(text, source=source or "local"):
             return
@@ -1954,7 +2239,80 @@ class BrahmaLive:
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
 
-    def _handle_email_flow(self, text: str) -> bool:
+    def _parse_ig_reply_intent(self, text: str) -> tuple[str, str]:
+        system_prompt = (
+            "You are an intent parser. The user received an Instagram DM. I asked: 'What should I reply, or should I take over?'. "
+            "The user responded. Determine their intent.\n"
+            "1. If they want me to take over/handle it, return TAKE_OVER.\n"
+            "2. If they want to cancel/skip, return CANCEL.\n"
+            "3. If they dictate a specific message to send (e.g. 'tell them I am busy', 'say hi'), return MANUAL_REPLY and the exact text.\n"
+            "4. If they are just greeting me (e.g. 'hi') or making small talk, return IGNORE.\n"
+            "Output ONLY valid JSON: {\"intent\": \"...\", \"reply_text\": \"...\"}"
+        )
+        try:
+            client = genai.Client(api_key=_get_api_key(), http_options={"api_version": "v1beta"})
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"{system_prompt}\n\nUser Response: {text}",
+                config={"temperature": 0.1, "response_mime_type": "application/json"}
+            )
+            data = json.loads(response.text.strip())
+            return data.get("intent", "IGNORE"), data.get("reply_text", "")
+        except Exception:
+            lower = text.lower()
+            if any(c in lower for c in ("cancel", "stop", "skip", "never mind", "abort")):
+                return "CANCEL", ""
+            if any(a in lower for a in ("take over", "auto mode", "handle it", "you reply")):
+                return "TAKE_OVER", ""
+            if lower.startswith("tell ") or lower.startswith("reply ") or lower.startswith("say ") or lower.startswith("send "):
+                import re
+                cleaned = re.sub(r"^(tell (him|her|them)?|reply( saying)?|say|send) ", "", text, flags=re.IGNORECASE)
+                return "MANUAL_REPLY", cleaned
+            return "IGNORE", ""
+
+    def _handle_ig_reply_flow(self, text: str) -> bool:
+        if getattr(self, "_ig_pending_thread", None):
+            thread_id = self._ig_pending_thread.get("thread_id")
+            username = self._ig_pending_thread.get("username")
+            message_text = self._ig_pending_thread.get('message')
+            
+            intent, payload = self._parse_ig_reply_intent(text)
+            
+            if intent == "CANCEL":
+                self._ig_reply_mode = False
+                msg = "Instagram reply cancelled."
+                self.ui.write_log(f"Brahma Echo: {msg}")
+                self.speak(msg)
+                self._ig_pending_thread = None
+                return True
+                
+            if intent == "TAKE_OVER":
+                self.ui.write_log("SYS: Taking over Instagram thread.")
+                self.speak(f"I will now take over the chat with {username}.")
+                from actions.instagram_chat import add_auto_thread, send_direct_reply
+                add_auto_thread(thread_id)
+                def _generate_and_send():
+                    try:
+                        reply = _ig_gemini_reply(username, message_text)
+                        send_direct_reply(thread_id, reply)
+                    except Exception as e:
+                        print(f"Error taking over thread: {e}")
+                threading.Thread(target=_generate_and_send, daemon=True).start()
+                
+            elif intent == "MANUAL_REPLY":
+                self.ui.write_log(f"SYS: Sending manual reply to {username}.")
+                self.speak("Message sent.")
+                from actions.instagram_chat import send_direct_reply
+                send_direct_reply(thread_id, payload)
+                
+            elif intent == "IGNORE":
+                return False # Let the main command loop handle this input
+                
+            self._ig_reply_mode = False
+            self._ig_pending_thread = None
+            return True
+        return False
+
         lower = text.lower()
         if any(cancel in lower for cancel in ("cancel", "never mind", "skip", "stop", "abort")):
             self._email_mode = False
@@ -2231,14 +2589,27 @@ class BrahmaLive:
         text = (text or "").strip()
         if not text:
             return
-        def _speak_thread():
-            try:
-                self.set_speaking(True)
-                from actions.attention_monitor import _speak_edge_native
-                _speak_edge_native(text)
-            finally:
-                self.set_speaking(False)
-        threading.Thread(target=_speak_thread, daemon=True).start()
+        
+        if self.session and self._loop:
+            # Route text through Gemini Live API for a unified native voice
+            import asyncio
+            async def _send():
+                try:
+                    prompt = f"System Alert / Context: {text}\n\nPlease relay this information to me naturally now."
+                    await self.session.send(input=prompt, end_of_turn=True)
+                except Exception as e:
+                    print(f"[BRAHMA ECHO] Unified Speak err: {e}")
+            asyncio.run_coroutine_threadsafe(_send(), self._loop)
+        else:
+            # Fallback to Edge TTS if Gemini Live is disconnected
+            def _speak_thread():
+                try:
+                    self.set_speaking(True)
+                    from actions.attention_monitor import _speak_edge_native
+                    _speak_edge_native(text)
+                finally:
+                    self.set_speaking(False)
+            threading.Thread(target=_speak_thread, daemon=True).start()
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -2326,9 +2697,69 @@ class BrahmaLive:
         result = "Done."
 
         try:
-            if name == "open_app":
+            if name == "computer_settings":
+                from actions.computer_settings import computer_settings as cs_run
+                r = await loop.run_in_executor(None, lambda: cs_run(parameters=args, player=self.ui))
+                result = r or "Settings updated."
+
+            elif name == "dev_agent":
+                from actions.dev_agent import dev_agent as da_run
+                r = await loop.run_in_executor(None, lambda: da_run(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+
+            elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
+                
+            elif name == "check_instagram_messages":
+                self.ui.write_log("SYS: Checking Instagram messages...")
+                from actions.instagram_chat import get_recent_messages
+                result = await loop.run_in_executor(None, get_recent_messages, 5)
+
+            elif name == "instagram_reply":
+                action = args.get("action")
+                reply_text = args.get("reply_text")
+                if getattr(self, "_ig_pending_thread", None):
+                    thread_id = self._ig_pending_thread.get("thread_id")
+                    username = self._ig_pending_thread.get("username")
+                    if action == "take_over":
+                        self.ui.write_log("SYS: Taking over Instagram thread via tool.")
+                        from actions.instagram_chat import add_auto_thread, send_direct_reply
+                        add_auto_thread(thread_id)
+                        message_text = self._ig_pending_thread.get('message')
+                        def _generate_and_send():
+                            try:
+                                reply = _ig_gemini_reply(username, message_text)
+                                send_direct_reply(thread_id, reply)
+                            except Exception as e:
+                                print(f"Error taking over thread: {e}")
+                        threading.Thread(target=_generate_and_send, daemon=True).start()
+                        result = f"Successfully took over the chat with {username}. The backend will now automatically reply to them."
+                    else:
+                        self.ui.write_log(f"SYS: Sending manual reply to {username}.")
+                        from actions.instagram_chat import send_direct_reply
+                        send_direct_reply(thread_id, reply_text)
+                        result = f"Successfully sent the manual reply to {username}."
+                        
+                    self._ig_reply_mode = False
+                    self._ig_pending_thread = None
+                else:
+                    result = "Error: There is no pending Instagram message to reply to right now."
+
+            elif name == "system_manager":
+                from actions.system_manager import run as sm_run
+                r = await loop.run_in_executor(None, lambda: sm_run(parameters=args, player=self.ui))
+                result = r or "System status retrieved."
+
+            elif name == "background_monitor":
+                from actions.background_monitor import run as bm_run
+                r = await loop.run_in_executor(None, lambda: bm_run(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "clipboard_processor":
+                from actions.clipboard_processor import process_clipboard
+                r = await loop.run_in_executor(None, lambda: process_clipboard(parameters=args, player=self.ui))
+                result = r or "Clipboard read."
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
@@ -2570,14 +3001,27 @@ class BrahmaLive:
     async def _listen_audio(self):
         print("[BRAHMA ECHO] 🎤 Mic started")
         loop = asyncio.get_event_loop()
+        import numpy as np
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
                 brahma_speaking = self._is_speaking
             if self._phone_active:
                 return
-            if not brahma_speaking and (not self.ui.muted or getattr(self.ui, "_wakeword_listening", False)):
-                data = indata.tobytes()
+            
+            if not self.ui.muted or getattr(self.ui, "_wakeword_listening", False):
+                # Calculate RMS volume of the chunk
+                rms = np.sqrt(np.mean(np.square(indata, dtype=np.float32)))
+                
+                # Smart Echo Gate: High threshold if AI is speaking, very low if silent
+                threshold = 1200.0 if brahma_speaking else 10.0
+                
+                if rms > threshold:
+                    data = indata.tobytes()
+                else:
+                    # Stream pure silence to keep timeline intact but prevent echo
+                    data = np.zeros_like(indata).tobytes()
+                    
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
                     {"data": data, "mime_type": "audio/pcm"}
@@ -2746,8 +3190,8 @@ class BrahmaLive:
                         self.session        = session
                         self._loop          = asyncio.get_event_loop()
                         self.audio_in_queue = asyncio.Queue()
-                        self.out_queue      = asyncio.Queue(maxsize=10)
-
+                        self.out_queue      = asyncio.Queue()  # Fix: removed maxsize=10 to prevent dropping packets
+                        
                         print("[BRAHMA ECHO] ✅ Connected.")
                         try:
                             self.ui.boot_set_step_status("Connect AI backend", "done")
@@ -2869,6 +3313,8 @@ def main():
 
             threading.Thread(target=_start_brahma_connect_server, daemon=True).start()
 
+
+
     ui.show_main()
     _startup_log("ui shown")
 
@@ -2900,6 +3346,52 @@ def main():
                     pass
         except Exception:
             pass
+
+        print(f"DEBUG: start_ig_daemon is {start_ig_daemon}")
+        
+        if start_ig_daemon:
+            from actions.instagram_chat import set_ig_prompt_callback
+            def _ig_handler(thread_id, username, text, is_auto):
+                if is_auto:
+                    return _ig_gemini_reply(username, text)
+                else:
+                    brahma_echo._ig_reply_mode = True
+                    brahma_echo._ig_pending_thread = {
+                        "thread_id": thread_id,
+                        "username": username,
+                        "message": text
+                    }
+                    msg = f"You have a new Instagram message from {username}. What should I reply, or should I take over the chat?"
+                    ui.write_log(f"📱 Insta ({username}): {text}")
+                    ui.write_log(f"Brahma Echo: {msg}")
+                    brahma_echo.speak(msg)
+                    return None
+                
+            set_ig_prompt_callback(_ig_handler)
+            start_ig_daemon()
+
+        def _clipboard_monitor():
+            try:
+                last_clip = pyperclip.paste()
+            except Exception:
+                last_clip = ""
+                
+            while True:
+                time.sleep(1.0)
+                try:
+                    curr_clip = pyperclip.paste()
+                    if curr_clip != last_clip:
+                        last_clip = curr_clip
+                        text = (curr_clip or "").strip()
+                        if text and len(text) > 3:
+                            reply = _clipboard_gemini_reply(text[:1000])
+                            ui.write_log(f"Brahma Echo (Clipboard): {reply}")
+                            brahma_echo.speak(reply)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_clipboard_monitor, daemon=True, name="clipboard-monitor").start()
+
         try:
             asyncio.run(brahma_echo.run())
         except KeyboardInterrupt:
