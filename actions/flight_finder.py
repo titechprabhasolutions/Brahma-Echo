@@ -57,7 +57,7 @@ def _parse_date(raw: str) -> str:
             return val.strftime("%Y-%m-%d")
 # replace the try/except genai block with:
     try:
-        from or_client import client
+        from llm_client import client
         result = client.chat(
             f"Today is {today.strftime('%Y-%m-%d')}. "
             f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
@@ -143,7 +143,7 @@ def _parse_flights_with_gemini(
     destination: str,
     date:        str,
 ) -> list[dict]:
-    from or_client import client
+    from llm_client import client
 
     prompt = (
         f"Extract flight options from {origin} to {destination} on {date} "

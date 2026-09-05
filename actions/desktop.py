@@ -96,7 +96,7 @@ def _execute_generated_code(code: str, player=None) -> str:
         return f"Execution error: {e}"
 
 def _ask_gemini_for_desktop_action(task: str) -> str:
-    from or_client import client
+    from llm_client import client
 
     desktop = str(_get_desktop())
     os_specific = {

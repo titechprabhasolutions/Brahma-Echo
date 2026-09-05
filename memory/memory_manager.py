@@ -139,7 +139,7 @@ def update_memory(memory_update: dict) -> dict:
 
 def should_extract_memory(user_text: str, brahma_text: str, api_key: str = "") -> bool:
     try:
-        from or_client import client
+        from llm_client import client
 
         combined = f"User: {user_text[:300]}\nBrahma AI: {brahma_text[:1000]}"
 
@@ -165,7 +165,7 @@ def should_extract_memory(user_text: str, brahma_text: str, api_key: str = "") -
 
 def extract_memory(user_text: str, brahma_text: str, api_key: str = "") -> dict:
     try:
-        from or_client import client
+        from llm_client import client
 
         combined = f"User: {user_text[:600]}\nBrahma AI: {brahma_text[:300]}"
 

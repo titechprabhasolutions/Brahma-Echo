@@ -294,7 +294,7 @@ def _focus_window(title: str) -> str:
 def _screen_find(description: str) -> tuple[int, int] | None:
     try:
         import base64
-        from or_client import client
+        from llm_client import client
 
         _require_pyautogui()
         w, h  = pyautogui.size()

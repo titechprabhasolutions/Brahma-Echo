@@ -56,3 +56,13 @@ dist/
 config/.email_key
 config/email_credentials.json
 config/ig_session.json
+
+# Installer and Build Scripts
+installer/
+install_wizard.py
+build_exe.py
+build_installer_exe.py
+search_results.txt
+homescreen background/node_modules/
+homescreen background/.next/
+homescreen background/out/

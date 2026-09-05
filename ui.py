@@ -50,7 +50,7 @@ from core.identity import identity
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     return Path(__file__).resolve().parent
 
 BASE_DIR   = _base_dir()
@@ -5227,7 +5227,7 @@ class SetupOverlay(QWidget):
         self._stack.addWidget(page)
 
     def _start_ignition(self):
-        self._stack.setCurrentIndex(3)
+        self._stack.setCurrentIndex(7)
         self._call_js("if(window.setReactorSpeed) window.setReactorSpeed(5.0);")
 
         self._ignite_step = 0
@@ -9360,12 +9360,45 @@ class SystemConnectivityPage(QWidget):
         controls = QHBoxLayout()
         controls.setSpacing(12)
         self._default_provider = QComboBox()
-        self._default_provider.addItems(["Google Gemini", "OpenRouter"])
-        self._default_provider.setCurrentText("Google Gemini" if self._load_app_settings().get("default_ai_provider", "Gemini") in {"Gemini", "Google Gemini"} else "OpenRouter")
+        self._default_provider.addItems(["Google Gemini", "OpenRouter", "Local"])
+        
+        current_provider = self._load_app_settings().get("default_ai_provider", "Gemini")
+        if current_provider in {"Gemini", "Google Gemini"}:
+            self._default_provider.setCurrentText("Google Gemini")
+        elif current_provider == "Local":
+            self._default_provider.setCurrentText("Local")
+        else:
+            self._default_provider.setCurrentText("OpenRouter")
+            
         self._default_provider.currentTextChanged.connect(self._set_default_provider)
         controls.addWidget(QLabel("Default AI Provider"))
         controls.addWidget(self._default_provider, 1)
         lay1.addLayout(controls)
+        
+        # Local AI Settings
+        self._local_ai_widget = QWidget()
+        local_lay = QVBoxLayout(self._local_ai_widget)
+        local_lay.setContentsMargins(0, 0, 0, 0)
+        
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel("Local Server URL"))
+        self._local_url_input = QLineEdit(self._load_app_settings().get("local_ai_url", "http://localhost:11434/v1"))
+        self._local_url_input.textChanged.connect(lambda t: self._set_setting("local_ai_url", t))
+        url_row.addWidget(self._local_url_input, 1)
+        local_lay.addLayout(url_row)
+        
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("Local Model Name"))
+        self._local_model_input = QLineEdit(self._load_app_settings().get("local_ai_model", "llama3.2"))
+        self._local_model_input.textChanged.connect(lambda t: self._set_setting("local_ai_model", t))
+        model_row.addWidget(self._local_model_input, 1)
+        local_lay.addLayout(model_row)
+        
+        self._local_ai_widget.setVisible(current_provider == "Local")
+        self._default_provider.currentTextChanged.connect(lambda t: self._local_ai_widget.setVisible(t == "Local"))
+        
+        lay1.addWidget(self._local_ai_widget)
+        
         self._auto_switch_btn = self._mk_toggle("Automatically switch if a provider fails", bool(self._load_app_settings().get("auto_provider_switch", True)), self._toggle_auto_provider_switch)
         lay1.addWidget(self._auto_switch_btn)
         lay.addWidget(card)
@@ -9860,7 +9893,12 @@ class SystemConnectivityPage(QWidget):
             self._ctrl()._win._refresh_startup_animation_button()
 
     def _set_default_provider(self, text: str):
-        provider = "Gemini" if (text or "").strip().lower().startswith("google") else "OpenRouter"
+        if (text or "").strip().lower().startswith("google"):
+            provider = "Gemini"
+        elif (text or "").strip().lower() == "local":
+            provider = "Local"
+        else:
+            provider = "OpenRouter"
         self._set_setting("default_ai_provider", provider)
         if self._ctrl() and hasattr(self._ctrl(), "write_log"):
             self._ctrl().write_log(f"SYS: Default AI provider set to {provider}.")
@@ -12178,6 +12216,13 @@ class BrahmaUI:
             pass
         self._win = MainWindow(face_path)
         try:
+            from core.updater import UpdateChecker
+            self._updater = UpdateChecker()
+            self._updater.update_available_sig.connect(self._show_update_prompt)
+            self._updater.start()
+        except Exception as e:
+            print(f"Failed to start updater: {e}")
+        try:
             self._win._startup_enabled()
         except Exception:
             pass
@@ -12674,6 +12719,22 @@ class BrahmaUI:
 
     def _toggle_mute(self):
         self._win._toggle_mute()
+
+    def _show_update_prompt(self, remote_hash: str):
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self._win,
+            "Update Detected!",
+            f"A new update is available on GitHub!\n\nDo you want to apply the update and restart the app?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            from core.updater import apply_update_and_restart
+            # Show a simple overlay while updating
+            self._win._set_status("Applying update from GitHub...")
+            import threading
+            threading.Thread(target=apply_update_and_restart, daemon=True).start()
 
     def _on_chat_event(self, event: dict):
         try:

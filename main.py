@@ -59,7 +59,7 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.attention_monitor import AttentionMonitor, speak_native, stop_native_speech, handle_call_action, read_event_preview, set_speech_sink
 # from actions.daily_briefing import compile_daily_briefing
-from or_client import client as openrouter_client
+from llm_client import client as openrouter_client
 from workspace_store import store as workspace_store
 from smart_home.service import SmartHomeService
 from plugin_manager import PluginManager
@@ -83,7 +83,7 @@ except Exception:
 
 def get_base_dir():
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     return Path(__file__).resolve().parent
 
 
@@ -304,7 +304,7 @@ def _ig_gemini_reply(username: str, text: str) -> str:
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or _is_gemini_limit_error(e):
             print("[InstagramChat] Gemini Rate Limit hit, falling back to OpenRouter...")
             try:
-                from or_client import client as openrouter_client
+                from llm_client import client as openrouter_client
                 return openrouter_client.chat(prompt, system=system_prompt)
             except Exception as or_e:
                 print(f"[InstagramChat] OpenRouter fallback failed: {or_e}")
@@ -335,7 +335,7 @@ def _clipboard_gemini_reply(text: str) -> str:
     except Exception as e:
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or _is_gemini_limit_error(e):
             try:
-                from or_client import client as openrouter_client
+                from llm_client import client as openrouter_client
                 return openrouter_client.chat(prompt, system=system_prompt)
             except Exception:
                 pass
@@ -964,13 +964,13 @@ TOOL_DECLARATIONS = [
     {
         "name": "file_controller",
         "description": (
-            "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, "
+            "Manages files and folders: open, close, list, create, delete, move, copy, rename, read, write, find, disk usage, "
             "and organizing a desktop or any folder into subfolders by type/date. Can also be used to explore and manage files on a connected Android phone."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | organize_folder | info"},
+                "action":      {"type": "STRING", "description": "open | close | list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | organize_folder | info"},
                 "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home. For android, use paths like downloads, documents, photos, movies, root."},
                 "target":      {"type": "STRING", "description": "If operating on an Android device, provide the device name or ID. Leave empty for PC local files."},
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},

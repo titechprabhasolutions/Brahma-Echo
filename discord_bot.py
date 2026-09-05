@@ -32,7 +32,7 @@ discord = _load_discord_module()
 
 from google import genai
 
-from or_client import client as openrouter_client
+from llm_client import client as openrouter_client
 
 
 logger = logging.getLogger("brahma echo.discord")

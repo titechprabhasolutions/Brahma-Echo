@@ -5,6 +5,13 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import send2trash
+import os
+import platform
+import subprocess
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 _FILE_TYPE_MAP = {
     "Images":    [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico"],
@@ -459,6 +466,76 @@ def get_file_info(path: str) -> str:
     except Exception as e:
         return f"Could not get file info: {e}"
 
+
+def open_file(path: str) -> str:
+    """Opens a file with its default native application. If exact path is not found, tries to find it intelligently."""
+    try:
+        target = Path(path).expanduser()
+        if not target.exists():
+            filename = target.name
+            if filename:
+                common_dirs = [
+                    Path.home() / "Desktop",
+                    Path.home() / "Documents",
+                    Path.home() / "Downloads"
+                ]
+                found = None
+                for d in common_dirs:
+                    if not d.exists():
+                        continue
+                    # Case-insensitive search
+                    for f in d.rglob("*"):
+                        if f.is_file() and f.name.lower() == filename.lower():
+                            found = f
+                            break
+                    if found:
+                        break
+                
+                if found:
+                    target = found
+                else:
+                    return f"File not found: {path} (also searched Desktop, Documents, Downloads)"
+            else:
+                return f"File not found: {path}"
+            
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(str(target))
+        elif system == "Darwin":
+            subprocess.run(["open", str(target)])
+        else:
+            subprocess.run(["xdg-open", str(target)])
+            
+        return f"Opened file: {target.name}"
+    except Exception as e:
+        return f"Could not open file: {e}"
+
+
+def close_file(name: str) -> str:
+    """Attempts to close an open file by killing processes with matching window titles."""
+    if not psutil:
+        return "psutil is not installed. Cannot close files."
+    if not name:
+        return "Please specify a filename to close."
+        
+    try:
+        # psutil doesn't give window titles easily cross-platform.
+        # Let's use a simpler approach on Windows using taskkill /FI "WINDOWTITLE eq *name*"
+        system = platform.system()
+        if system == "Windows":
+            # Using taskkill with window title filter
+            cmd = f'taskkill /FI "WINDOWTITLE eq *{name}*" /F'
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            
+            # If no instances found, taskkill outputs info to stdout
+            if "INFO: No tasks" in result.stdout:
+                return f"Could not find any open windows containing '{name}'."
+            return f"Closed window(s) containing '{name}'."
+        else:
+            return "File closing is currently only supported on Windows."
+    except Exception as e:
+        return f"Could not close file: {e}"
+
 def file_controller(
     parameters: dict,
     response=None,
@@ -603,6 +680,13 @@ def file_controller(
         elif action == "info":
             full = _full_path(path, name)
             result = get_file_info(full)
+
+        elif action == "open":
+            full = _full_path(path, name)
+            result = open_file(full)
+            
+        elif action == "close":
+            result = close_file(name)
 
         else:
             result = f"Unknown action: '{action}'"
