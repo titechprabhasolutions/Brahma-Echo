@@ -1706,6 +1706,8 @@ class GestureCameraPreview(QFrame):
         self._cap = None
         self._timer = None
         self._hands = None
+        self._cv2 = None
+        self._mp = None
         self._use_tasks_api = False
         self._vision_module = None
         self._prev_pinch = False
@@ -1861,6 +1863,8 @@ class GestureCameraPreview(QFrame):
             try:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
                 pass
             if not cap.isOpened():
@@ -1869,7 +1873,7 @@ class GestureCameraPreview(QFrame):
             self._cap = cap
             self._timer = QTimer(self)
             self._timer.timeout.connect(self._tick)
-            self._timer.start(30)
+            self._timer.start(40)
             self._set_status("Camera ready. Move your hand to steer the cursor.", "searching")
             try:
                 import pyautogui
@@ -1902,6 +1906,8 @@ class GestureCameraPreview(QFrame):
             except Exception:
                 pass
             self._hands = None
+        self._mp = None
+        self._cv2 = None
 
         try:
             self.setFixedHeight(self._collapsed_height)
@@ -1952,18 +1958,24 @@ class GestureCameraPreview(QFrame):
 
     def _process_frame(self, frame):
         try:
-            import cv2
+            if self._cv2 is None:
+                import cv2
+                self._cv2 = cv2
+            cv2 = self._cv2
         except Exception as exc:
             self._set_status(f"Gesture camera unavailable: {exc}", "lost")
             return
 
         import importlib
 
-        mp = None
-        try:
-            mp = importlib.import_module("mediapipe")
-        except Exception:
-            pass
+        mp = self._mp
+        if mp is None:
+            try:
+                mp = importlib.import_module("mediapipe")
+                self._mp = mp
+            except Exception as exc:
+                self._set_status(f"Gesture camera unavailable: {exc}", "lost")
+                return
 
         if mp is None:
             self._set_status(
@@ -2018,7 +2030,17 @@ class GestureCameraPreview(QFrame):
                         return
 
                 try:
-                    self._hands = vision.HandLandmarker.create_from_model_path(str(model_path))
+                    tasks_python = importlib.import_module("mediapipe.tasks.python")
+                    base_options = tasks_python.BaseOptions(model_asset_path=str(model_path))
+                    options = vision.HandLandmarkerOptions(
+                        base_options=base_options,
+                        running_mode=vision.RunningMode.IMAGE,
+                        num_hands=1,
+                        min_hand_detection_confidence=0.5,
+                        min_hand_presence_confidence=0.5,
+                        min_tracking_confidence=0.5,
+                    )
+                    self._hands = vision.HandLandmarker.create_from_options(options)
                     self._use_tasks_api = True
                     self._vision_module = vision
                 except Exception as exc:
@@ -8312,33 +8334,41 @@ class FloatingGestureCard(QWidget):
         btn_lay.addWidget(self.btn)
         self.lay.addLayout(btn_lay)
         
+        self.setFixedWidth(320)
         self.preview = GestureCameraPreview()
-        self.preview.setFixedSize(280, 210)
+        self.preview.setFixedWidth(320)
+        self.preview.setFixedHeight(320)
         self.preview.hide()
-        
         self.lay.addWidget(self.preview)
-        
-    def toggle_preview(self):
-        if self.preview.isVisible():
-            self.preview.hide()
-            self.preview._stop_camera()
-            self.btn.setStyleSheet(
-                "QPushButton { background: #0c0e12; color: #ffffff; border: 1px solid rgba(255, 179, 0, 0.20); border-radius: 8px; font-weight: bold; }"
-                "QPushButton:hover { color: #ffb300; border: 1px solid #ffb300; }"
-            )
-        else:
+
+    def set_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        if enabled:
             self.preview.show()
             self.preview._start_camera()
+            self.btn.setText("🖐 Gestures: ON")
             self.btn.setStyleSheet(
                 "QPushButton { background: rgba(255, 179, 0, 0.15); color: #ffb300; border: 1px solid #ffb300; border-radius: 8px; font-weight: bold; }"
                 "QPushButton:hover { background: rgba(255, 179, 0, 0.25); }"
             )
+        else:
+            self.preview._stop_camera()
+            self.preview.hide()
+            self.btn.setText("🖐 Gestures: OFF")
+            self.btn.setStyleSheet(
+                "QPushButton { background: #0c0e12; color: #ffffff; border: 1px solid rgba(255, 179, 0, 0.20); border-radius: 8px; font-weight: bold; }"
+                "QPushButton:hover { color: #ffb300; border: 1px solid #ffb300; }"
+            )
         self.adjustSize()
-        if self.window() and hasattr(self.window(), 'resizeEvent'):
+        if self.window() and hasattr(self.window(), "resizeEvent"):
             self.window().resizeEvent(None)
+
+    def toggle_preview(self):
+        self.set_enabled(not self.preview.isVisible())
 
 
 class MainWindow(QMainWindow):
+    _gesture_control_sig = pyqtSignal(bool)
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
     _scan_sig  = pyqtSignal(bool, str)
@@ -8363,6 +8393,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, face_path: str):
         super().__init__()
+        self._gesture_control_sig.connect(self._apply_gesture_control)
         self.setWindowFlag(Qt.WindowType.Tool, False)
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setWindowIcon(self._make_window_icon())
@@ -8904,6 +8935,14 @@ class MainWindow(QMainWindow):
             if service is not None:
                 self._devices_page.refresh(force=True)
 
+    def set_gesture_control(self, enabled: bool):
+        self._gesture_control_sig.emit(bool(enabled))
+
+    def _apply_gesture_control(self, enabled: bool):
+        card = getattr(self, "_floating_gesture_card", None)
+        if card is not None:
+            card.set_enabled(enabled)
+
     def resizeEvent(self, event):
         if event:
             super().resizeEvent(event)
@@ -8913,7 +8952,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_floating_gesture_card') and self.centralWidget():
             cw = self.centralWidget()
             rw = self._right_panel.width() if hasattr(self, '_right_panel') and self._right_panel.isVisible() and not getattr(self, '_right_collapsed', False) else 0
-            self._floating_gesture_card.move(cw.width() - rw - self._floating_gesture_card.width() - 20, 20)
+            max_x = max(12, cw.width() - self._floating_gesture_card.width() - 12)
+            preferred_x = cw.width() - rw - self._floating_gesture_card.width() - 16
+            self._floating_gesture_card.move(max(12, min(preferred_x, max_x)), 64)
         if getattr(self, '_briefing_overlay', None) and self._briefing_overlay.isVisible():
             self._position_briefing_overlay()
         if getattr(self, '_remote_overlay', None) and self._remote_overlay.isVisible():
@@ -14131,6 +14172,9 @@ class BrahmaUI:
     @on_chat_event.setter
     def on_chat_event(self, cb):
         self._win.on_chat_event = cb
+
+    def set_gesture_control(self, enabled: bool):
+        self._win.set_gesture_control(bool(enabled))
 
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
