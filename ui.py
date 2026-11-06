@@ -1816,7 +1816,7 @@ class GestureCameraPreview(QFrame):
 
         lay.addLayout(footer)
 
-        self._expanded_height = 320
+        self._expanded_height = 380
         self._collapsed_height = 64
 
         try:
@@ -8334,10 +8334,10 @@ class FloatingGestureCard(QWidget):
         btn_lay.addWidget(self.btn)
         self.lay.addLayout(btn_lay)
         
-        self.setFixedWidth(320)
+        self.setFixedWidth(340)
         self.preview = GestureCameraPreview()
-        self.preview.setFixedWidth(320)
-        self.preview.setFixedHeight(320)
+        self.preview.setFixedWidth(340)
+        self.preview.setFixedHeight(380)
         self.preview.hide()
         self.lay.addWidget(self.preview)
 
