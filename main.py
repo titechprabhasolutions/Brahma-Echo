@@ -2001,6 +2001,35 @@ class BrahmaLive:
         except Exception:
             pass
 
+    def _handle_gesture_control_command(self, text: str) -> bool:
+        command = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())
+        command = " ".join(command.split())
+        enable_phrases = (
+            "gesture control on", "turn gesture control on", "enable gesture control",
+            "start gesture control", "activate gesture control", "gestures on",
+            "turn on gestures", "enable gestures",
+        )
+        disable_phrases = (
+            "gesture control off", "turn gesture control off", "disable gesture control",
+            "stop gesture control", "deactivate gesture control", "gestures off",
+            "turn off gestures", "disable gestures",
+        )
+        if any(phrase in command for phrase in enable_phrases):
+            try:
+                self.ui.set_gesture_control(True)
+                self.speak("Turning gesture control on. Check the gesture camera status on the screen.")
+            except Exception as exc:
+                self.speak(f"I could not start gesture control: {exc}")
+            return True
+        if any(phrase in command for phrase in disable_phrases):
+            try:
+                self.ui.set_gesture_control(False)
+                self.speak("Gesture control is now off.")
+            except Exception as exc:
+                self.speak(f"I could not stop gesture control: {exc}")
+            return True
+        return False
+
     def _on_text_command(self, text: str, source: str = "local"):
         self._reset_idle_activity()
         text = (text or "").strip()
@@ -2026,6 +2055,9 @@ class BrahmaLive:
                     return
         except Exception:
             pass
+        if self._handle_gesture_control_command(text):
+            return
+
         if self._reply_mode:
             if self._handle_pending_reply(text):
                 return
