@@ -72,10 +72,17 @@ def estimate_gesture_state(
     pinky_pip = landmarks[18]
 
     # Finger open/closed state
-    index_open = index_tip[1] < index_pip[1]
-    middle_open = middle_tip[1] < middle_pip[1]
-    ring_open = ring_tip[1] < ring_pip[1]
-    pinky_open = pinky_tip[1] < pinky_pip[1]
+    # Compare each fingertip's distance from its MCP joint rather than only
+    # comparing Y coordinates. This also works when the hand is tilted.
+    def finger_is_open(tip, pip, mcp):
+        tip_reach = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1])
+        pip_reach = math.hypot(pip[0] - mcp[0], pip[1] - mcp[1])
+        return tip_reach > pip_reach * 1.12
+
+    index_open = finger_is_open(index_tip, index_pip, index_mcp)
+    middle_open = finger_is_open(middle_tip, middle_pip, middle_mcp)
+    ring_open = finger_is_open(ring_tip, ring_pip, landmarks[13])
+    pinky_open = finger_is_open(pinky_tip, pinky_pip, landmarks[17])
 
     # Distance measurements
     palm_scale = max(0.01, math.hypot(middle_mcp[0] - wrist[0], middle_mcp[1] - wrist[1]))
@@ -139,7 +146,7 @@ def estimate_gesture_state(
     elif not index_open and not middle_open and not ring_open and not pinky_open and (thumb_tip[1] < thumb_ip[1] < thumb_mcp[1]):
         gesture_name = "Thumbs Up 👍"
         if tracker is not None:
-            if now - tracker.last_volume_time > 0.14:
+            if now - tracker.last_volume_time > 0.38:
                 action = "volume_up"
                 tracker.last_volume_time = now
         else:
@@ -171,6 +178,9 @@ def estimate_gesture_state(
             tracker.palm_held_start = 0.0
         if index_open:
             gesture_name = "Pointer"
+
+    if tracker is not None and gesture_name != "Open Palm ✋":
+        tracker.palm_held_start = 0.0
 
     return {
         "hand_detected": True,
