@@ -385,6 +385,9 @@ This project is published under a custom source-available license. See `LICENSE`
 
 ## Maintainer
 
-- User
+- **Suryaansh Tiwari** ([Buildonaut](https://www.youtube.com/@Buildonaut-AI)) — TiTech Prabha Solutions
+  - GitHub: [@titechprabhasolutions](https://github.com/titechprabhasolutions)
+  - YouTube: [@Buildonaut-AI](https://www.youtube.com/@Buildonaut-AI)
+  - Instagram: [@buildonaut.dev](https://www.instagram.com/buildonaut.dev/)
 
 > Preserve attribution and keep credentials secure when building on top of Brahma Echo.
