@@ -2560,7 +2560,7 @@ class BrahmaLive:
 
             threading.Thread(target=_run_screen_process, daemon=True).start()
             return
-        if self._use_openrouter_first or not self._loop or not self.session:
+        if self._uses_unified_client() or self._use_openrouter_first or not self._loop or not self.session:
             threading.Thread(target=self._fallback_reply, args=(text, memory_ctx), daemon=True).start()
             return
         self.ui.set_state("THINKING")
@@ -3387,6 +3387,17 @@ class BrahmaLive:
                 self._pending_attention = None
 
 
+    def _selected_ai_provider(self) -> str:
+        try:
+            if hasattr(self.ui, "_load_app_settings"):
+                return (self.ui._load_app_settings().get("default_ai_provider") or "Gemini")
+        except Exception:
+            pass
+        return "Gemini"
+
+    def _uses_unified_client(self) -> bool:
+        return self._selected_ai_provider() in {"OpenRouter", "Local", "LLMTR"}
+
     def _fallback_reply(self, text: str, memory_ctx: str = ""):
         try:
             self.ui.set_state("THINKING")
@@ -3399,7 +3410,7 @@ class BrahmaLive:
             except Exception:
                 pass
             reply = ""
-            gemini_first = not self._use_openrouter_first
+            gemini_first = (not self._use_openrouter_first) and (not self._uses_unified_client())
             request_text = f"{memory_ctx}\n\nCurrent User Request:\n{text}" if memory_ctx else text
 
             if gemini_first:

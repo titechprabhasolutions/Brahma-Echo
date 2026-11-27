@@ -178,6 +178,7 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 - Git installed
 - Gemini API key
 - OpenRouter API key (optional but recommended)
+- LLMTR API key (optional OpenAI-compatible provider)
 
 ### 1. Clone the repository
 
@@ -208,6 +209,7 @@ Create `config/api_keys.json` with your keys:
 {
   "gemini_api_key": "YOUR_GEMINI_API_KEY",
   "openrouter_api_key": "YOUR_OPENROUTER_API_KEY",
+  "llmtr_api_key": "YOUR_LLMTR_API_KEY",
   "instagram_username": "YOUR_IG_USERNAME",
   "instagram_password": "YOUR_IG_PASSWORD"
 }
@@ -224,6 +226,12 @@ Create `config/api_keys.json` with your keys:
 1. Register at https://openrouter.ai.
 2. Generate an `sk-or-` API key.
 3. Add the key to `openrouter_api_key`.
+
+#### LLMTR API Key
+
+1. Create a key at https://llmtr.com/dashboard/keys.
+2. Add the key to `llmtr_api_key`, or paste it in Settings → AI Providers.
+3. Select LLMTR as the default AI provider. Model IDs use the `vendor/model` form, for example `qwen/qwen3.8-27b-free`. The default API base is `https://llmtr.com/v1`.
 
 ### 5. Optional: Configure Discord integration
 
@@ -245,7 +253,7 @@ start_brahma.vbs
 
 Core configuration files:
 
-- `config/api_keys.json` — Gemini and OpenRouter credentials
+- `config/api_keys.json` — Gemini, OpenRouter, and LLMTR credentials
 - `config/app_settings.json` — voice, UI, startup, and automation preferences
 - `config/learned_rules.json` — persistent user preferences, habits, and behavioral directives
 - `config/patch_history.json` — audit log of autonomous hotfixes and rollbacks
