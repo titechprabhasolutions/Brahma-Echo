@@ -23,14 +23,14 @@ This repository includes a security overview for Brahma Echo's current runtime m
 ### Local credential handling
 
 - API keys are stored in `config/api_keys.json`.
-- The code reads `gemini_api_key` and `openrouter_api_key` directly from this file.
+- The code reads `gemini_api_key`, `openrouter_api_key`, and `llmtr_api_key` directly from this file.
 - This file is a local configuration artifact and should never be committed to source control.
 - There is no built-in secret vault; security depends on file system permissions and local access controls.
 
 ### AI provider access
 
-- Brahma Echo uses Gemini as the primary AI provider and OpenRouter as a fallback.
-- Both API keys are loaded from the local config file and sent to the respective service clients.
+- Brahma Echo uses Gemini as the primary AI provider, with OpenRouter, LLMTR, and Local available as selectable providers.
+- Provider API keys are loaded from the local config file and sent to the respective service clients.
 - `config/api_keys.json` is plaintext JSON and is not encrypted by the application.
 
 ### Brahma Connect gateway exposure

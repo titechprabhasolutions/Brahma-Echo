@@ -1390,6 +1390,26 @@ def _default_app_settings() -> dict:
     }
 
 
+def _provider_label(value: str) -> str:
+    value = (value or "").strip()
+    if value in {"Gemini", "Google Gemini"}:
+        return "Google Gemini"
+    if value in {"Local", "LLMTR", "OpenRouter"}:
+        return value
+    return "OpenRouter"
+
+
+def _provider_value(label: str) -> str:
+    text_value = (label or "").strip().lower()
+    if text_value.startswith("google") or text_value == "gemini":
+        return "Gemini"
+    if text_value == "local":
+        return "Local"
+    if text_value == "llmtr":
+        return "LLMTR"
+    return "OpenRouter"
+
+
 def _default_discord_settings() -> dict:
     return {
         "bot_token": "",
@@ -8729,12 +8749,14 @@ class MainWindow(QMainWindow):
                 "gemini_api_key": "",
                 "openrouter_api_key": "",
                 "anthropic_api_key": "",
+                "llmtr_api_key": "",
                 "os_system": platform.system(),
             }
         try:
             data = json.loads(API_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 data.setdefault("anthropic_api_key", "")
+                data.setdefault("llmtr_api_key", "")
                 return data
         except Exception:
             pass
@@ -8742,6 +8764,7 @@ class MainWindow(QMainWindow):
             "gemini_api_key": "",
             "openrouter_api_key": "",
             "anthropic_api_key": "",
+            "llmtr_api_key": "",
             "os_system": platform.system(),
         }
 
@@ -9789,6 +9812,7 @@ class MainWindow(QMainWindow):
                     "gemini_api_key":    key,
                     "openrouter_api_key": or_key,
                     "anthropic_api_key": existing.get("anthropic_api_key", ""),
+                    "llmtr_api_key": existing.get("llmtr_api_key", ""),
                     "os_system":         os_name,
                 }, indent=4),
                 encoding="utf-8",
@@ -10544,9 +10568,9 @@ class SystemConnectivityPage(QWidget):
                     border: 1px solid rgba(255, 179, 0, 0.5);
                 }
             """)
-        edit.clicked.connect(lambda: self._open_api_keys())
+        edit.clicked.connect(lambda _checked=False, key=setting_key: self._edit_provider_key(key))
         test = QPushButton("Test Connection")
-        test.clicked.connect(lambda: self._test_provider(setting_key))
+        test.clicked.connect(lambda _checked=False, key=setting_key: self._test_provider(key))
         btn_lay.addWidget(edit)
         btn_lay.addWidget(test)
         r.addLayout(btn_lay)
@@ -10754,20 +10778,22 @@ class SystemConnectivityPage(QWidget):
             "auto",
             "openrouter",
         )
+        self._llmtr_row, self._llmtr_status, self._llmtr_key = self._provider_row(
+            "LLMTR",
+            self._api_defaults.get("llmtr_api_key", ""),
+            self._load_app_settings().get("llmtr_model", "qwen/qwen3.8-27b-free"),
+            "llmtr",
+        )
         lay1.addWidget(self._gemini_row)
         lay1.addWidget(self._or_row)
+        lay1.addWidget(self._llmtr_row)
         controls = QHBoxLayout()
         controls.setSpacing(12)
         self._default_provider = QComboBox()
-        self._default_provider.addItems(["Google Gemini", "OpenRouter", "Local"])
+        self._default_provider.addItems(["Google Gemini", "OpenRouter", "LLMTR", "Local"])
         
         current_provider = self._load_app_settings().get("default_ai_provider", "Gemini")
-        if current_provider in {"Gemini", "Google Gemini"}:
-            self._default_provider.setCurrentText("Google Gemini")
-        elif current_provider == "Local":
-            self._default_provider.setCurrentText("Local")
-        else:
-            self._default_provider.setCurrentText("OpenRouter")
+        self._default_provider.setCurrentText(_provider_label(current_provider))
             
         self._default_provider.currentTextChanged.connect(self._set_default_provider)
         controls.addWidget(QLabel("Default AI Provider"))
@@ -10793,10 +10819,22 @@ class SystemConnectivityPage(QWidget):
         model_row.addWidget(self._local_model_input, 1)
         local_lay.addLayout(model_row)
         
-        self._local_ai_widget.setVisible(current_provider == "Local")
-        self._default_provider.currentTextChanged.connect(lambda t: self._local_ai_widget.setVisible(t == "Local"))
-        
         lay1.addWidget(self._local_ai_widget)
+
+        self._llmtr_ai_widget = QWidget()
+        llmtr_lay = QVBoxLayout(self._llmtr_ai_widget)
+        llmtr_lay.setContentsMargins(0, 0, 0, 0)
+        llmtr_model_row = QHBoxLayout()
+        llmtr_model_row.addWidget(QLabel("LLMTR Model"))
+        self._llmtr_model_input = QLineEdit(self._load_app_settings().get("llmtr_model", "qwen/qwen3.8-27b-free"))
+        self._llmtr_model_input.setPlaceholderText("vendor/model, for example qwen/qwen3.8-27b-free")
+        self._llmtr_model_input.textChanged.connect(lambda t: self._set_setting("llmtr_model", t))
+        llmtr_model_row.addWidget(self._llmtr_model_input, 1)
+        llmtr_lay.addLayout(llmtr_model_row)
+        lay1.addWidget(self._llmtr_ai_widget)
+
+        self._sync_provider_extra_settings(self._default_provider.currentText())
+        self._default_provider.currentTextChanged.connect(self._sync_provider_extra_settings)
         
         self._auto_switch_btn = self._mk_toggle("Automatically switch if a provider fails", bool(self._load_app_settings().get("auto_provider_switch", True)), self._toggle_auto_provider_switch)
         lay1.addWidget(self._auto_switch_btn)
@@ -11834,6 +11872,7 @@ class SystemConnectivityPage(QWidget):
         return {
             "gemini_api_key": "",
             "openrouter_api_key": "",
+            "llmtr_api_key": "",
             "os_system": platform.system(),
         }
 
@@ -11881,15 +11920,56 @@ class SystemConnectivityPage(QWidget):
             except Exception:
                 pass
 
+    def _save_api_key_field(self, field: str, value: str):
+        if self._ctrl() and hasattr(self._ctrl(), "_win"):
+            data = self._ctrl()._win._load_api_defaults()
+        elif API_FILE.exists():
+            try:
+                data = json.loads(API_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        else:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[field] = value
+        os.makedirs(API_FILE.parent, exist_ok=True)
+        API_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    def _edit_provider_key(self, setting_key: str):
+        if setting_key != "llmtr":
+            self._open_api_keys()
+            return
+        current = (self._load_api_defaults().get("llmtr_api_key") or "").strip()
+        text, ok = QInputDialog.getText(
+            self,
+            "LLMTR API Key",
+            "Paste your LLMTR API key (https://llmtr.com/dashboard/keys):",
+            QLineEdit.EchoMode.Password,
+            current,
+        )
+        if not ok:
+            return
+        self._save_api_key_field("llmtr_api_key", text.strip())
+        if self._ctrl() and hasattr(self._ctrl(), "write_log"):
+            if text.strip():
+                self._ctrl().write_log("SYS: LLMTR API key updated.")
+            else:
+                self._ctrl().write_log("SYS: LLMTR API key cleared.")
+        self.refresh()
+
     def _open_api_keys(self):
         if self._ctrl() and hasattr(self._ctrl(), "_win"):
             self._ctrl()._win._show_setup(self._ctrl()._win._load_api_defaults())
 
     def _test_provider(self, setting_key: str):
+        api = self._load_api_defaults()
         if setting_key == "gemini":
-            msg = "Google Gemini key detected." if self._load_api_defaults().get("gemini_api_key") else "Google Gemini key missing."
+            msg = "Google Gemini key detected." if api.get("gemini_api_key") else "Google Gemini key missing."
+        elif setting_key == "llmtr":
+            msg = "LLMTR key detected." if api.get("llmtr_api_key") else "LLMTR key missing."
         else:
-            msg = "OpenRouter key detected." if self._load_api_defaults().get("openrouter_api_key") else "OpenRouter key missing."
+            msg = "OpenRouter key detected." if api.get("openrouter_api_key") else "OpenRouter key missing."
         if self._ctrl() and hasattr(self._ctrl(), "write_log"):
             self._ctrl().write_log(f"SYS: {msg}")
         self.refresh()
@@ -11943,13 +12023,15 @@ class SystemConnectivityPage(QWidget):
             self._ctrl()._win._set_startup_animation_enabled(bool(checked))
             self._ctrl()._win._refresh_startup_animation_button()
 
+    def _sync_provider_extra_settings(self, text: str):
+        value = _provider_value(text)
+        if hasattr(self, "_local_ai_widget"):
+            self._local_ai_widget.setVisible(value == "Local")
+        if hasattr(self, "_llmtr_ai_widget"):
+            self._llmtr_ai_widget.setVisible(value == "LLMTR")
+
     def _set_default_provider(self, text: str):
-        if (text or "").strip().lower().startswith("google"):
-            provider = "Gemini"
-        elif (text or "").strip().lower() == "local":
-            provider = "Local"
-        else:
-            provider = "OpenRouter"
+        provider = _provider_value(text)
         self._set_setting("default_ai_provider", provider)
         if self._ctrl() and hasattr(self._ctrl(), "write_log"):
             self._ctrl().write_log(f"SYS: Default AI provider set to {provider}.")
@@ -12063,9 +12145,17 @@ class SystemConnectivityPage(QWidget):
         try:
             self._gemini_status.setText("Connected" if api.get("gemini_api_key") else "Not connected")
             self._or_status.setText("Connected" if api.get("openrouter_api_key") else "Not connected")
+            self._llmtr_status.setText("Connected" if api.get("llmtr_api_key") else "Not connected")
             self._gemini_key.setText(self._provider_key_preview(api.get("gemini_api_key", "")))
             self._or_key.setText(self._provider_key_preview(api.get("openrouter_api_key", "")))
-            self._default_provider.setCurrentText("Google Gemini" if app.get("default_ai_provider", "Gemini") == "Gemini" else "OpenRouter")
+            self._llmtr_key.setText(self._provider_key_preview(api.get("llmtr_api_key", "")))
+            provider = app.get("default_ai_provider", "Gemini")
+            self._default_provider.setCurrentText(_provider_label(provider))
+            if hasattr(self, "_llmtr_model_input"):
+                self._llmtr_model_input.blockSignals(True)
+                self._llmtr_model_input.setText(app.get("llmtr_model", "qwen/qwen3.8-27b-free"))
+                self._llmtr_model_input.blockSignals(False)
+            self._sync_provider_extra_settings(_provider_label(provider))
             self._auto_switch_btn.setChecked(bool(app.get("auto_provider_switch", True)))
             self._attention_message_btn.setChecked(bool(app.get("attention_message_prompts", True)))
             self._attention_call_btn.setChecked(bool(app.get("attention_call_prompts", True)))
@@ -12103,7 +12193,7 @@ class SystemConnectivityPage(QWidget):
             self._discord_status.setText("Bot Status: Offline")
             self._discord_msg.setText("Token required")
         if self._ctrl() and hasattr(self._ctrl(), "_win"):
-            self._sys_provider.setText("Gemini" if app.get("default_ai_provider", "Gemini") == "Gemini" else "OpenRouter")
+            self._sys_provider.setText(app.get("default_ai_provider", "Gemini") or "Gemini")
 
     def _handle_create_desktop_shortcut(self):
         success, path_or_err = self._create_desktop_shortcut_logic()
